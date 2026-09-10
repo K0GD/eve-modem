@@ -212,3 +212,42 @@ def fig_blocks():
 
 
 fig_blocks()
+
+
+def fig_variants():
+    """Frame error rate vs C/N0: ORI waveform (2.87 Hz bins) vs the DSES 23 cm
+    matched-bin variant (1.5 Hz), AWGN chi-square model as in ORI's link check."""
+    rng = np.random.default_rng(0)
+    M, NSYM = 4096, 11
+
+    def ser(cn0_db, rbw, nfr, trials=1500):
+        g = 10 ** (cn0_db / 10) / rbw
+        df = 2 * nfr
+        zt = 0.5 * rng.noncentral_chisquare(df, 2 * nfr * g, size=trials)
+        errs = 0
+        for i in range(0, trials, 300):
+            n = min(300, trials - i)
+            zf = 0.5 * rng.chisquare(df, size=(n, M - 1)).max(axis=1)
+            errs += int((zf >= zt[i:i + n]).sum())
+        return errs / trials
+
+    cn0 = np.arange(-5.0, 1.51, 0.5)
+    configs = [("A: ORI, 2.87 Hz bins, 473 frames (165 s symbol)", 2.87, 473, BLUE, "-"),
+               ("B: DSES 23 cm, 1.5 Hz bins, 247 frames (165 s symbol)", 1.5, 247, VERM, "--"),
+               ("B-long: 1.5 Hz bins, 473 frames (315 s symbol)", 1.5, 473, TEAL, "-.")]
+    fig, ax = plt.subplots(figsize=(6.6, 3.2))
+    for label, r, n, col, ls in configs:
+        fer = [1 - (1 - ser(c, r, n)) ** NSYM for c in cn0]
+        ax.plot(cn0, fer, color=col, ls=ls, lw=2, label=label)
+    ax.axhline(0.1, color=GREY, lw=0.8, ls=":")
+    ax.text(-4.9, 0.12, "10 % frame error rate", fontsize=7.5, color=GREY)
+    ax.axvspan(-5.0, -3.3, color="#F3E6DE", zorder=0)
+    ax.text(-4.15, 0.62, "DSES 23 cm\nmonostatic\n(1000-1500 W)", fontsize=7.5, color=VERM, ha="center")
+    ax.set_xlabel("C/N0 (dB-Hz)"); ax.set_ylabel("frame error rate (11 symbols)")
+    ax.set_ylim(0, 1.02); ax.set_xlim(cn0.min(), cn0.max())
+    ax.set_title("Matched 1.5 Hz bins buy about 1.1 dB at the same symbol length (AWGN model)", fontsize=9)
+    ax.legend(loc="upper right", fontsize=7.5, frameon=False)
+    fig.tight_layout(); fig.savefig(OUT / "fig_variants.png", dpi=300); plt.close(fig)
+
+
+fig_variants()
