@@ -7,7 +7,7 @@
 | Date | 2026-09-10 |
 | Prepared by | Rick Hambly, K0GD, Deep Space Exploration Society |
 | Waveform design | Pete Wyckoff, KA3WCA, Open Research Institute ("Venus Bounce Transmitter Spiral #2") |
-| Status | Design baseline; parameters marked TBC await confirmation from ORI |
+| Status | Design baseline; parameters marked TBC await confirmation from ORI. Draft 2 adds the band plan of 2026-09-10 (23 cm at 1299.5 MHz for Venus 2026; 13 cm later; EME on both bands without amplifiers) |
 
 This document describes the DSES implementation of the ORI Earth-Venus-Earth (EVE)
 waveform for the Venus inferior conjunction of 24 October 2026, and it defines every
@@ -40,10 +40,18 @@ The design decisions in this revision:
   schedule, rather than playing a pre-generated file. SigMF export and import are retained
   for interoperability with ORI's files, for bench tests, and for sharing with other
   stations, but they are not how the station transmits (section 3).
-- **Monostatic operation is the baseline.** DSES transmits and listens to its own echo.
-  Dwingeloo will operate at 1299.5 MHz only, and Effelsberg is opportunistic, so no partner
-  receiver at 2304 MHz can be planned on. Bistatic operation with a partner receiver is a
-  supported mode, not the baseline (section 4).
+- **The 2026 Venus attempt is a 23 cm operation at 1299.5 MHz.** The 13 cm package will
+  not be ready this year, so DSES transmits with the 23 cm package retuned from 1296 to
+  1299.5 MHz, the frequency Dwingeloo, Stockert, and Effelsberg use. The modem is
+  frequency-agile (1296, 1299.5, 2304, 2400 MHz, and others); every frequency-dependent
+  quantity is computed per schedule (section 2.4).
+- **Monostatic operation is the baseline**, with reception by a European station as the
+  upside case at 1299.5 MHz. At 23 cm the monostatic link is 2 to 4 dB below the design
+  point; repeat-and-combine over a session recovers that, and a 25 m or 100 m receiver
+  adds 3 or 15 dB (section 2.2).
+- **EME testing needs no power amplifier.** The B210's own output into the dish gives a
+  C/N0 of +12 dB-Hz at 1296 MHz and +16 dB-Hz at 2304 MHz off the Moon, so both bands can
+  be tested at and below the design point before either amplifier exists (section 4.6).
 - **The 30-minute message is sent in chunks** of up to the Earth-Venus round-trip time
   (272 s on 24 October), with the station listening for the echo of each chunk while the
   amplifier cools. The chunk length is a parameter; 4 minutes is the working value, giving
@@ -79,46 +87,89 @@ the flight software will use a JPL Horizons table for the operational numbers.
 | Venus above 20° at Haswell | 15:30 – 21:15 UTC (5.75 h) | Rises 13:25, sets 23:30 UTC |
 | Maximum elevation | 34° at 18:30 UTC | |
 | Angular separation from the Sun | about 6° | Solar noise in the sidelobes raises Tsys; quantify in the link budget |
-| Two-way Doppler shift, 2304 MHz | +9.5 kHz (13:00) → −4.5 kHz (23:30), zero at 19:50 UTC | |
-| Two-way Doppler rate | up to −0.48 Hz/s at 18:30 UTC | 79 Hz across one 165 s symbol |
+| Two-way Doppler shift | 1299.5 MHz: +5.3 → −2.5 kHz; 2304 MHz: +9.5 → −4.5 kHz; zero at 19:50 UTC | Scales with frequency |
+| Two-way Doppler rate | 1299.5 MHz: up to −0.27 Hz/s; 2304 MHz: up to −0.48 Hz/s (18:30 UTC) | 45 Hz (8 tone spacings) or 79 Hz (14) across one 165 s symbol |
 
 Venus stays within 10 percent of minimum distance from 7 October to 12 November, so the
 attempt is a multi-week window, not one day. The round-trip time and Doppler numbers above
 change slowly over that window and the schedule generator recomputes them per session.
 
-![Figure 1 — Two-way Doppler shift and rate at Haswell on 24 October 2026 at 2304 MHz, with Venus elevation. The shaded band is the working window above 20 degrees.](figures/fig_doppler.png)
+![Figure 1 — Two-way Doppler shift at 2304 and 1299.5 MHz, Doppler rate at 2304 MHz, and Venus elevation at Haswell on 24 October 2026. The shaded band is the working window above 20 degrees; at 1299.5 MHz the rate scales by 0.56.](figures/fig_doppler.png)
 
 ## 2.2 Link budget
 
 The ORI link budget notebook's DSES case (18.29 m dish, 69 percent efficiency, 1500 W,
 2304 MHz, 0.4 dB LNA, 30° elevation, minimum distance) gives a monostatic C/N0 of
-**+1.7 dB-Hz**. Pete Wyckoff sized the waveform for C/N0 = 0 dB-Hz, so the DSES
-monostatic link closes at the design point with under 2 dB of margin, before solar noise
-and pointing loss. ORI's analytic check of the Python waveform (AWGN, 473 frames per symbol)
-gives a frame error rate of 2 percent at 0 dB-Hz, 38 percent at −1 dB-Hz, and 60 percent
-at −1.33 dB-Hz. Pete's MATLAB channel model adds Rayleigh fading with a 1.05 dB correction
-that the AWGN check omits; the DSES receiver validation (section 5.4) includes the Rayleigh
-Monte Carlo so the margin is stated honestly.
++1.7 dB-Hz. Pete Wyckoff sized the waveform for C/N0 = 0 dB-Hz. The 2026 attempt is at
+1299.5 MHz with the 23 cm package, so the table scales the ORI case to the bands DSES can
+actually use, holding the dish and the radar cross-section fixed (the two-way path scales as
+the wavelength squared, the two antenna gains as its inverse fourth power, net −5 dB at 23 cm):
 
-Two consequences follow. First, every decibel of the transmit chain matters: drive level,
-feed match, and pointing (the dish's measured 0.15° boresight offset is a real term at
-2304 MHz, where the beam is 0.14° wide). Second, repeat-and-combine (section 4.5) is not
-a fallback but a planned capability: the receiver accumulates the same message across
-repetitions, and a session that sends the message five times has 7 dB more to work with
-than a single pass.
+| Case | C/N0 (dB-Hz) | Basis |
+|---|---|---|
+| DSES monostatic, 2304 MHz, 1500 W, Tsys 76 K | +1.7 | ORI notebook, DSES dataclass |
+| DSES monostatic, 2400 MHz, 1500 W, Tsys 76 K | +2.0 | scaled |
+| DSES monostatic, 1299.5 MHz, 1500 W, Tsys 55 K | −1.8 | scaled; albedo 0.152 (CAMRAS) |
+| DSES monostatic, 1299.5 MHz, 1000 W, Tsys 55 K | −3.6 | scaled |
+| Cross-check: Dwingeloo's measured +0.65 (25 m, 1 kW, 1299.5 MHz) scaled to an 18.3 m dish | −4.8 | gain to the fourth power |
+| DSES transmits at 1299.5 MHz, Dwingeloo or Stockert receives (25 m) | monostatic +2.7 | receive gain only |
+| DSES transmits, Effelsberg receives (100 m, Tsys 25 K) | monostatic +15 to +18 | ORI proposal: +17.7 dB-Hz at 2304 MHz |
+| Repeat-and-combine, N passes of the message | +10 log10 N | five passes = +7 dB |
+
+Three conclusions. First, at 23 cm a single monostatic pass sits 2 to 4 dB below the design
+point before solar noise, so a single-pass decode is not the plan; five passes in the
+5.75-hour window (+7 dB) bring the session to +3 to +5 dB-Hz equivalent, which closes.
+Second, any European station that receives with the DSES schedule file turns the link
+positive on its own: Dwingeloo or Stockert by about 3 dB, Effelsberg by 15 dB or more.
+Third, every decibel of the transmit chain matters at 23 cm: the actual amplifier power,
+the feed match, and the receiver Tsys are the open items that set where in that table DSES
+lands (O2). ORI's analytic check of the waveform gives a frame error rate of 2 percent at
+0 dB-Hz, 38 percent at −1 dB-Hz, and 60 percent at −1.33 dB-Hz (AWGN); Pete's MATLAB
+channel adds Rayleigh fading with a 1.05 dB correction, and the DSES receiver validation
+(section 5.4) includes that so the margin is stated honestly.
+
+The 13 cm case, when that package exists, is the ORI +1.7 dB-Hz at 2304 MHz or +2.0 at
+2400 MHz, with the same repeat-and-combine arithmetic on top.
 
 ## 2.3 Stations and frequencies
 
 | Station | Role in October 2026 | Frequency |
 |---|---|---|
-| DSES Haswell, 18.3 m, 1500 W | Transmit and receive (this document) | 2304 MHz planned (2400 MHz mentioned by ORI as an alternative; TBC) |
+| DSES Haswell, 18.3 m | Transmit and receive (this document) | **1299.5 MHz in 2026** with the 23 cm package (1296 MHz native; retune TBC, O2). 13 cm package (2304 or 2400 MHz) not before the next apparition |
 | Dwingeloo (CAMRAS), 25 m, 1000 W | Transmit and receive, own campaign | 1299.5 MHz only (confirmed by ORI 2026-09-09) |
 | Effelsberg, 100 m | Receive only, opportunistic, secondary to a baseline survey | Follows Dwingeloo; proposal alternates 1299.5 and 2304 MHz |
 | Stockert, 25 m | Receive, own campaign | 1299.5 MHz |
 
-The Effelsberg-Haswell mutual window for Venus is roughly 13:30 to 16:30 UTC at low
-elevation on both ends (estimate, to be computed exactly when a session is offered). This
-is why monostatic is the baseline: it is the only mode DSES controls end to end.
+Because DSES will be on 1299.5 MHz, the European stations can in principle receive DSES
+during the mutual window, roughly 13:30 to 16:30 UTC at low elevation on both ends
+(estimate, to be computed exactly when a session is arranged); the schedule file of
+section 8.1 is what makes that possible. Monostatic remains the baseline because it is the
+only mode DSES controls end to end.
+
+## 2.4 Band plan and frequency dependence
+
+The B210 tunes 70 MHz to 6 GHz, and the modem carries the dial frequency in the schedule,
+so the same software serves every band. What changes with frequency is computed per
+schedule from the ephemeris; what does not change is the waveform itself, which ORI defines
+with the same parameters on every band (their own smoke-test file is at 1296 MHz).
+
+| Band | Use | Two-way Doppler, Venus at conjunction | Peak rate, per symbol | Doppler spread (ORI: 1.5 Hz at 1299.5, scaled) |
+|---|---|---|---|---|
+| 1296 MHz | EME tests, 23 cm package native | n/a (Moon: about ±2 kHz) | Moon: small | libration, variable |
+| 1299.5 MHz | **Venus 2026**; Dwingeloo, Stockert, Effelsberg band | +5.3 to −2.5 kHz | 0.27 Hz/s, 45 Hz (8 spacings) | 1.5 Hz |
+| 2304 MHz | 13 cm package, next apparition | +9.5 to −4.5 kHz | 0.48 Hz/s, 79 Hz (14 spacings) | 2.66 Hz |
+| 2400 MHz | 13 cm alternative | +9.9 to −4.7 kHz | 0.50 Hz/s, 83 Hz (14 spacings) | 2.77 Hz |
+
+One consequence for the waveform: ORI's 2.87 Hz bin is matched to the spread at 2304 MHz.
+At 1299.5 MHz the spread is 1.5 Hz, so a 2.87 Hz bin is wider than the channel needs and
+costs about 2.8 dB relative to a bin matched to 1.5 Hz. A matched 23 cm variant would be a
+different waveform (tone spacing 3 Hz, symbol 315 s for the same frame count) that the
+European receivers would have to match; the recommendation is to keep ORI's parameters on
+every band for interoperability and to book the 2.8 dB against repeat-and-combine, unless
+ORI decides otherwise (O11). The RF package, feed, and amplifier per band are station items
+(section 7).
+
+
 
 # 3. Architecture
 
@@ -280,13 +331,21 @@ changes is parameterized, not rewritten:
 | Chunk length (monostatic) | ≤ 272 s, working 240 s | ≤ 2.5 s (7 frames), alternating TX and RX |
 | Two-way Doppler | ±10 kHz, rate ≤ 0.5 Hz/s | ±4 kHz at 1296 MHz, rate small |
 | Spread | 2.87 Hz assumed | Libration spread at 1296 MHz can exceed 5.74 Hz; pick a low-libration window or set R_bw from the predicted spread |
-| Link | C/N0 ≈ +1.7 dB-Hz | Hundreds of dB stronger; cut power to milliwatts to reach C/N0 ≈ 0 dB and actually test the design point |
-| Frequency | 2304 MHz | 1296 MHz (existing DSES EME capability) |
+| Link | C/N0 −4 to +2 dB-Hz by band and power | B210 output alone (+10 dBm) gives +12 dB-Hz at 1296 or 1299.5 MHz and +16 dB-Hz at 2304 or 2400 MHz (Tsys 60 / 76 K, mean Moon distance); 0 dBm gives +2 and +6 |
+| Frequency | 1299.5 MHz (2026) | 1296 or 1299.5 MHz and 2304 or 2400 MHz: both bands, no amplifier needed |
+
+The B210 alone is the transmitter for EME testing. Its +10 dBm output through the feed
+lands 12 to 16 dB above the design point, so the test is run at the design point by turning
+the B210 output down, or by adding calibrated noise to the archive offline, with no
+amplifier in the chain, on either band, as soon as a feed and a transmit/receive switch at
+the feed exist (O12). This decouples validation of the modulation and protocol from the
+amplifier schedules entirely, which is why it can start before the 23 cm retune and long
+before the 13 cm package.
 
 The EME test proves the schedule and keying at the fastest cadence the design will ever
 use, the GPS timing, the Doppler module with a different target, the receiver, and
-repeat-and-combine, end to end. Its keying rate (2.5 s alternation) is a station question
-recorded in section 10.
+repeat-and-combine, end to end. Its switching rate (2.5 s alternation) is a station
+question recorded in section 10.
 
 # 5. Software design
 
@@ -363,7 +422,7 @@ Pete Wyckoff and Michelle Thompson (asked 2026-09-09).
 | Parameter | Symbol | Value | Source and notes |
 |---|---|---|---|
 | Modulation | | 4096-ary orthogonal FSK, non-coherent | Pete Wyckoff, Spiral #2 |
-| FFT bin width = frame rate | R_bw | 2.87 Hz | ORI Python; equals the Doppler-spread forecast at 2304 MHz. TBC: the MATLAB used 2.67 Hz |
+| FFT bin width = frame rate | R_bw | 2.87 Hz | ORI Python; equals the Doppler-spread forecast at 2304 MHz, applied by ORI on every band. TBC: the MATLAB used 2.67 Hz; see O11 for 23 cm |
 | Tone spacing | Δf | 5.74 Hz (= 2 R_bw) | One guard bin between tones |
 | Alphabet | M | 4096 tones, 12 bits per symbol | |
 | Frames per symbol | N_frames | 473 | ORI Python; its README notes Pete's slide shows about 440. TBC |
@@ -440,8 +499,8 @@ the entries marked TBD need them.
 
 | Interface | Specification |
 |---|---|
-| Radio | Ettus USRP B210, one unit, owned exclusively by the modem process during a session |
-| Transmit port | TX/RX A, to the amplifier drive chain. B210 output at 2304 MHz: [+10 dBm maximum]; the modem runs A = 0.8 (−2 dB) at full TX gain unless the drive requirement says otherwise. TBD: required drive level at the PA input and any pad |
+| Radio | Ettus USRP B210, one unit, owned exclusively by the modem process during a session. Tunes 70 MHz to 6 GHz; the dial frequency is a schedule parameter (1296, 1299.5, 2304, 2400 MHz, and others) |
+| Transmit port | TX/RX A. Venus: to the amplifier drive chain; B210 output [+10 dBm maximum], the modem runs A = 0.8 (−2 dB) at full TX gain unless the drive requirement says otherwise. EME tests: directly to the feed through the transmit/receive switch, no amplifier; output set by TX gain to the wanted C/N0 (section 4.6). TBD: required drive level at each PA input and any pad |
 | Receive port | RX2 A, from the LNA. RX gain set for the receiver noise to sit 10–15 dB above the B210 floor (verified live with the tone-strip display) |
 | Sample rate | 1,504,706.56 S/s nominal (32 × modem rate); actual UHD rate read back and the residual absorbed by the frequency tracker |
 | Tuning | f_dial with the verified LO-offset method inherited from the Workbench; the LO is parked off the comb so its leakage never lands on a tone |
@@ -462,7 +521,7 @@ the entries marked TBD need them.
 
 | Interface | Specification |
 |---|---|
-| Feed | The 2304 MHz feed (13 cm) is a station change from the drift-scan feed; the modem does not control feeds |
+| Feed | 23 cm feed (1296 / 1299.5 MHz) for 2026; 13 cm feed (2304 / 2400 MHz) when that package exists. A feed change is a station operation; the modem does not control feeds |
 | Pointing | The modem does not steer the dish. It computes and displays Venus azimuth and elevation from the ephemeris for the operator. The measured 0.15° boresight offset applies at 2304 MHz, where the beam is 0.14° wide; the pointing corrections memo of 2026-09-07 covers it |
 
 # 8. ICD part C — data and files
@@ -549,7 +608,7 @@ code-sharing boundary, not a runtime one:
 | # | Decision | Rationale |
 |---|---|---|
 | D1 | Stream the waveform; SigMF is export/import only | Chunking, live Doppler, no multi-GB files; nothing lost since schedule + symbols regenerate the IQ |
-| D2 | Monostatic baseline, 4-minute chunks | No plannable 2304 MHz partner; 4 min stays under both the round trip and the PA limit; 64 min per message |
+| D2 | Monostatic baseline, 4-minute chunks | The only mode DSES controls; European receivers at 1299.5 MHz are the upside via the schedule file. 4 min stays under both the round trip and the PA limit; 64 min per message |
 | D3 | ORI Python conventions are the air-interface spec; MATLAB set selectable for simulation only | ORI: the Python is the current implementation |
 | D4 | T_sym defined as 473 whole frames; modem rate defined as 16,384 × 2.87 Hz | Removes the two non-integer artefacts in the ORI numbers |
 | D5 | GPS time and GPSDO reference replace the maser | Non-coherent detection needs frame assignment and frequency, not phase |
@@ -558,13 +617,15 @@ code-sharing boundary, not a runtime one:
 | D8 | Receiver is offline-first; raw archive always written | Any session re-decodable with a better receiver |
 | D9 | Separate project; Workbench radio classes factored into a shared module | Different operational character; keeps the Workbench release train clean |
 | D10 | Phase-continuous symbol hops | Cleaner for the Class-C chain; invisible to a non-coherent receiver |
+| D11 | Frequency-agile modem: dial frequency per schedule; ORI waveform parameters unchanged on every band | 23 cm in 2026, 13 cm later, EME on both; interoperability with the 1299.5 MHz stations |
+| D12 | EME tests use the bare B210 as the transmitter | +12 to +16 dB-Hz off the Moon with no amplifier; validation decoupled from amplifier schedules |
 
 ## 10.2 Open issues
 
 | # | Issue | Owner | Needed by |
 |---|---|---|---|
 | O1 | Confirm R_bw = 2.87 Hz and N_frames = 473 (vs 440 on the slide, 540 in MATLAB) | Pete Wyckoff / ORI | Before stage 2 |
-| O2 | Operating frequency: 2304 or 2400 MHz; feed and PA availability | DSES station team | Before EME test |
+| O2 | 23 cm package: can it be retuned from 1296 to 1299.5 MHz; its power and Tsys (these set the monostatic C/N0, −2 to −4 dB-Hz) | DSES station team | Before Venus |
 | O3 | GPSDO at Plishner: model, 10 MHz level, PPS availability, cabling to the B210 | DSES station team | Before EME test |
 | O4 | PA drive level required at the amplifier input; pad or preamp between B210 and PA | DSES station team | Before bench stage 4 |
 | O5 | Keying interface: sequencer input type, lead/lag, LNA protection; whether 2.5 s alternation is possible for monostatic EME | DSES station team | Before EME test |
@@ -573,6 +634,9 @@ code-sharing boundary, not a runtime one:
 | O8 | Whether ORI wants the receiver contributed back to `Python_Implementation` | ORI | After EME |
 | O9 | Bistatic sessions with Effelsberg: if offered, the exact mutual window and who compensates Doppler | ORI / DSES | If offered |
 | O10 | EME libration spread at 1296 MHz on the test date; choose R_bw for the test | DSES | Before EME test |
+| O11 | R_bw at 23 cm: keep ORI's 2.87 Hz (interoperable, −2.8 dB) or a matched 1.5 Hz variant (incompatible with the European receivers)? Recommendation: keep 2.87 Hz | ORI / DSES | Before Venus |
+| O12 | Transmit/receive switch at the feed for direct-B210 EME tests: relay type, LNA protection, switching time for the 2.5 s alternation | DSES station team | Before EME test |
+| O13 | 13 cm band: 2304 or 2400 MHz, and the feed for it | DSES station team | Next apparition |
 
 # Appendix A — MATLAB simulation versus Python implementation
 
@@ -601,7 +665,18 @@ in section 6 follows the Python.
 - 4-minute chunk: 240 s = 688.8 frames; the schedule rounds chunks to whole frames (688
   frames = 239.7 s), so a message needs 5,203 / 688 = 7.56 → 8 chunks.
 - Round trip 2026-10-24: 2 × 40.8 million km / c = 272 s; ephemeris-computed per session.
-- Doppler across one symbol at the peak rate: 0.48 Hz/s × 164.8 s = 79 Hz = 13.8 tone
-  spacings. Across one frame: 0.17 Hz = 0.06 bin.
+- Doppler across one symbol at the peak rate: 2304 MHz, 0.48 Hz/s × 164.8 s = 79 Hz =
+  13.8 tone spacings; 1299.5 MHz, 0.27 Hz/s × 164.8 s = 45 Hz = 7.8 spacings. Across one
+  frame: 0.17 Hz (0.06 bin) and 0.09 Hz.
+- EME link with the bare B210 (+10 dBm, 18.29 m dish, mean Moon distance, radar
+  cross-section 6.5 percent of the disc): path loss 271.2 dB at 1296 MHz and 276.2 dB at
+  2304 MHz; C/N0 = +12.2 dB-Hz (Tsys 60 K) and +16.2 dB-Hz (Tsys 76 K).
 - Radio rate: 32 × 47,022.08 = 1,504,706.56 S/s; a 1 ppm rate error is 0.05 Hz at the top
   of the comb, absorbed by the residual tracker.
+
+# Document history
+
+| Revision | Date | Change |
+|---|---|---|
+| Rev A draft 1 | 2026-09-10 | Initial design description and ICD |
+| Rev A draft 2 | 2026-09-10 | Band plan: Venus 2026 at 1299.5 MHz with the 23 cm package, 13 cm (2304 / 2400 MHz) later, EME tests on both bands with the bare B210; link budget per band (section 2.2), section 2.4, D11 – D12, O11 – O13 |
