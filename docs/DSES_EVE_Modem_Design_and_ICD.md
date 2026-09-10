@@ -1,8 +1,8 @@
 # Earth-Venus-Earth Modem — Design Description and Interface Control Document
 
+<!-- widths: 1.4,5.3 -->
 | | |
 |---|---|
-<!-- widths: 1.4,5.3 -->
 | Document | DSES EVE Modem Design and ICD |
 | Revision | Rev A — DRAFT for team review |
 | Date | 2026-09-10 |
@@ -130,6 +130,10 @@ why the anchor row differs from the rows that matter.
 | DSES 1000 W transmits, Dwingeloo 25 m receives | −3.6 | 76 | −3.6 | |
 | DSES 1500 W transmits, Effelsberg 100 m receives | +11.9 | 52 | +11.9 | opportunistic; ORI's Effelsberg proposal |
 | DSES 1000 W transmits, Effelsberg 100 m receives | +10.1 | 52 | +10.1 | |
+| 2028 apparition, 44.5 million km: DSES monostatic, 2304 MHz, 1500 W | −1.1 | 76 | −1.1 | 13 cm package; a week either side of conjunction |
+| 2028: DSES monostatic, 2400 MHz, 1500 W | −0.8 | 78 | −0.8 | |
+| 2028: DSES monostatic, 1299.5 MHz, 1500 W | −4.8 | 57 | −4.8 | 23 cm, for comparison |
+| 2028: DSES 1500 W at 2304 MHz transmits, Effelsberg receives | +13.9 | 73 | +13.9 | |
 
 Pete Wyckoff sized the waveform for C/N0 = 0 dB-Hz. Read against that:
 
@@ -147,6 +151,35 @@ Pete Wyckoff sized the waveform for C/N0 = 0 dB-Hz. Read against that:
 - **Every decibel of the transmit chain matters at 23 cm**: the actual amplifier power
   (500 W versus 1500 W is 4.8 dB), the feed match, and the receiver Tsys are the open
   items that decide where in the table DSES lands (O2).
+
+**Will monostatic 23 cm succeed in 2026?** Yes, on the model, provided the 23 cm amplifier
+delivers 1000 W or more and the receiver combines passes. The 10 percent frame-error
+threshold is −0.6 dB-Hz for Variant A and −1.7 dB-Hz for Variant B (section 2.4).
+Against the single-pass figures above, the passes that must be combined are:
+
+<!-- widths: 1.6,1.5,1.5,2.1 -->
+| 23 cm power | Single pass | Variant B, passes to combine | Margin after 5 passes (+7 dB) |
+|---|---|---|---|
+| 1500 W | −3.3 dB-Hz | 2 (+3.0 dB) | +5.4 dB |
+| 1000 W | −5.0 dB-Hz | 3 (+4.8 dB) | +3.7 dB |
+| 500 W | −8.0 dB-Hz | 5 (+7.0 dB), no margin | +0.7 dB |
+
+Rayleigh fading (about 1 dB), pointing (0.7 dB two-way), and solar noise at 6° come out of
+those margins, and the model's 1.5 dB conservatism goes back in. At 1500 W the session is
+comfortable; at 1000 W it works with the full window; at 500 W it depends on luck. A
+single European receiver with the schedule file removes the question for that session.
+
+**The 2028 apparition.** The next inferior conjunction is 2028-06-01 at 0.288 AU (43.2
+million km, round trip 288 s), 6 percent farther than 2026 (−0.5 dB), and on that day Venus
+passes only 1.1° from the Sun, too close to point at. A week either side the separation is
+10 to 12° at 0.295 to 0.297 AU (44.5 million km, −0.8 dB relative to 2026); two weeks
+either side it is 20° at 0.32 AU (−1.4 dB). Venus stands high at Haswell, 72 to 78° at
+transit and above 20° for about ten hours a day, which helps Tsys. So 2028 is not an
+easier target: it is farther and nearer the Sun. What changes is the 13 cm package: at
+2304 MHz with 1500 W the monostatic single pass is −1.1 dB-Hz (Variant A threshold −0.6),
+one combined pass short of closing, and Effelsberg receiving would sit at +13.9 dB-Hz.
+Whatever is learned at 23 cm in 2026 (real Tsys, real amplifier power, real pointing loss)
+is the input that makes the 2028 numbers trustworthy.
 
 ORI's analytic check of the waveform gives a frame error rate of 2 percent at 0 dB-Hz,
 38 percent at −1 dB-Hz, and 60 percent at −1.33 dB-Hz (AWGN); Pete's MATLAB channel adds
@@ -398,7 +431,7 @@ question recorded in section 10.
 ## 5.1 Module layout
 
 The modem is a Python package `eve/` in this project, pure NumPy/SciPy in the core with GNU
-Radio only in the two blocks that touch the radio.
+Radio only in the two blocks that touch the radio:
 
 <!-- widths: 1.2,5.5 -->
 | Module | Responsibility |
@@ -593,7 +626,7 @@ the entries marked TBD need them.
 | Interface | Specification |
 |---|---|
 | Feed | 23 cm feed (1296 / 1299.5 MHz) for 2026; 13 cm feed (2304 / 2400 MHz) when that package exists. A feed change is a station operation; the modem does not control feeds |
-| Pointing | The modem does not steer the dish. It computes and displays Venus azimuth and elevation from the ephemeris for the operator. The measured 0.15° boresight offset applies at 2304 MHz, where the beam is 0.14° wide; the pointing corrections memo of 2026-09-07 covers it |
+| Pointing | The modem does not steer the dish. It computes and displays Venus azimuth and elevation from the ephemeris for the operator. The measured 0.15° boresight offset is 0.7 dB two-way at 23 cm (0.88° beam) and 2.2 dB at 13 cm (0.50° beam); the pointing corrections memo of 2026-09-07 covers it |
 
 # 8. ICD part C — data and files
 
@@ -783,3 +816,4 @@ as symbols 4 to 6, because 48 bits of message repeat exactly 48 bits later.
 | Rev A draft 1 | 2026-09-10 | Initial design description and ICD |
 | Rev A draft 2 | 2026-09-10 | Band plan: Venus 2026 at 1299.5 MHz with the 23 cm package, 13 cm (2304 / 2400 MHz) later, EME tests on both bands with the bare B210; link budget per band (section 2.2), section 2.4, D11 – D12, O11 – O13 |
 | Rev A draft 3 | 2026-09-10 | Rick's review: link budget recomputed row by row with ORI's classes at the 2026 distance (`link_budget/`); Variant B for DSES 23 cm monostatic (2.4, 6.1.1, Figure 2, D13); message K0PRT K0PRT and Appendix C test vector (D14); US spelling; table and paragraph pagination rules; narrower register columns |
+| Rev A draft 4 | 2026-09-10 | Table pagination (header keeps with first row, short tables whole); the monostatic-23 cm verdict with passes to combine; the 2028 apparition (geometry and link budget); beamwidth figures corrected (0.88° at 23 cm, 0.50° at 13 cm) |

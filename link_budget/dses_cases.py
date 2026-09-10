@@ -75,6 +75,16 @@ def main():
     add("DSES 1000 W transmits, Effelsberg 100 m receives", european(L.EffelsbergLinkParameters, 1299.5),
         tx=dses(1299.5, 1000), basis="")
 
+    # --- the next apparition: inferior conjunction 2028-06-01, 43.2 Mkm, but only 1.1 deg
+    # from the Sun that day; usable a week either side at ~44.5 Mkm and 10-12 deg separation
+    D_2028 = 44_500_000
+    add("2028 (Jun 1 +/- 7 d, 44.5 Mkm): DSES monostatic, 2304 MHz, 1500 W", dses(2304, 1500), dist=D_2028,
+        basis="13 cm package, 10-12 deg from the Sun")
+    add("2028: DSES monostatic, 2400 MHz, 1500 W", dses(2400, 1500), dist=D_2028, basis="")
+    add("2028: DSES monostatic, 1299.5 MHz, 1500 W", dses(1299.5, 1500), dist=D_2028, basis="23 cm, for comparison")
+    add("2028: DSES 1500 W 2304 MHz transmits, Effelsberg receives", european(L.EffelsbergLinkParameters, 2304),
+        tx=dses(2304, 1500), dist=D_2028, basis="")
+
     lines = ["| Case | C/N0 (dB-Hz) | Tsys (K) | Margin vs 0 dB-Hz | Basis |",
              "|---|---|---|---|---|"]
     for label, c, t, dist, basis in rows:

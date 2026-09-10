@@ -15,3 +15,7 @@ Distance 40.8 million km unless noted (2026-10-24). Receiver elevation = each si
 | DSES 1000 W transmits, Dwingeloo 25 m receives | -3.6 | 76 | -3.6 |  |
 | DSES 1500 W transmits, Effelsberg 100 m receives | +11.9 | 52 | +11.9 | opportunistic; ORI's Effelsberg proposal |
 | DSES 1000 W transmits, Effelsberg 100 m receives | +10.1 | 52 | +10.1 |  |
+| 2028 (Jun 1 +/- 7 d, 44.5 Mkm): DSES monostatic, 2304 MHz, 1500 W (44 Mkm) | -1.1 | 76 | -1.1 | 13 cm package, 10-12 deg from the Sun |
+| 2028: DSES monostatic, 2400 MHz, 1500 W (44 Mkm) | -0.8 | 78 | -0.8 |  |
+| 2028: DSES monostatic, 1299.5 MHz, 1500 W (44 Mkm) | -4.8 | 57 | -4.8 | 23 cm, for comparison |
+| 2028: DSES 1500 W 2304 MHz transmits, Effelsberg receives (44 Mkm) | +13.9 | 73 | +13.9 |  |
