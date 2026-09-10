@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.conda/
+~$*
+*.eve.iq
+docs/*.docx

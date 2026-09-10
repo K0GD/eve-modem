@@ -1,0 +1,12 @@
+# Line-ending policy — the release zip is staged straight from this working
+# tree on EITHER dev machine, so checkout line endings become SHIPPED line
+# endings. A Windows autocrlf checkout gave launcher.sh a CRLF shebang in the
+# 1.1.6 zip, which silently broke launching on Linux/macOS (\r after "bash").
+# Force LF for everything a Unix system executes or parses:
+*.sh        text eol=lf
+*.command   text eol=lf
+*.desktop   text eol=lf
+*.py        text eol=lf
+*.yml       text eol=lf
+# Windows-native scripts are safest with CRLF (cmd.exe quirks):
+*.bat       text eol=crlf
