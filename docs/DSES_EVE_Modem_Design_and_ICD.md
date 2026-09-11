@@ -155,7 +155,7 @@ own sensitivity sweep shows the result barely depends on the backscatter model (
 from Lambertian to near-specular). DSES carries both: 0.152 as the validated planning
 value and 0.117 as the physically motivated pessimistic case (D17, O15).
 
-<!-- widths: 2.6,1.4,1.4,1.3 -->
+<!-- widths: 3.1,1.2,1.3,1.1 -->
 | Case, 2026-10-24 | Albedo 0.152 (static) | Albedo 0.117 (date-resolved) | Difference |
 |---|---|---|---|
 | DSES monostatic, 2304 MHz, 1500 W | +0.4 dB-Hz | −0.7 dB-Hz | −1.1 dB |
