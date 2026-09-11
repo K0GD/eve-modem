@@ -48,7 +48,7 @@ radio classes into an importable module, not by living in one file.
 Project-local conda env, like the Workbench:
 
     C:\ProgramData\radioconda\Scripts\conda.exe env create --prefix .\.conda -f environment.yml
-    conda activate .\.conda          (numpy's BLAS needs the env's Libraryin on PATH)
+    conda activate .\.conda          (numpy's BLAS needs the env's Library\bin on PATH)
     python -m pytest tests -q
     .conda\python.exe -m eve.montecarlo                 # ORI-style link table, Variant A
     .conda\python.exe -m eve.montecarlo --variant B
