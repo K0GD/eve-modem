@@ -4,3 +4,9 @@ __pycache__/
 ~$*
 *.eve.iq
 docs/*.docx
+
+# project-local conda env
+.conda/
+__pycache__/
+*.pyc
+.pytest_cache/

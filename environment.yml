@@ -1,0 +1,41 @@
+# environment.yml
+# Project-local conda env for the DSES EVE modem (EVE_Modem repo).
+# Create with: conda env create --prefix ./.conda -f environment.yml
+# Update with: conda env update --prefix ./.conda -f environment.yml --prune
+# (conda lives in radioconda on the Windows box: C:\ProgramData\radioconda\Scripts\conda.exe)
+
+name: dses-eve   # ignored when using --prefix; kept for documentation
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.12
+
+  # --- radio: only gr_blocks.py and radio.py touch these (design doc section 5.1) ---
+  - gnuradio
+  - uhd
+
+  # --- modem core (pure NumPy/SciPy) ---
+  - numpy
+  - scipy
+
+  # --- ephemeris for doppler.py (Horizons table primary, astropy + DE440s fallback) ---
+  - astropy
+  - jplephem
+
+  # --- operator display (same Qt binding rule as the Workbench: PySide6 only, never PyQt) ---
+  - pyside6
+  - pyqtgraph
+  - matplotlib
+
+  # --- tooling ---
+  - pip
+  - pytest
+
+  - pip:
+    # BCH(127,106) cross-check for eve/bch.py (the modem's own encoder/decoder has no
+    # galois dependency; tests skip the cross-check if galois is absent)
+    - galois
+    # SigMF interchange with ORI's files (sigmf_io.py)
+    - sigmf
