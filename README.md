@@ -35,11 +35,23 @@ radio classes into an importable module, not by living in one file.
   block-accumulating frequency tracker, window receiver, repeat-and-combine
   across passes), `sigmf_io.py` (ORI-format export with the `ori:design` and
   `dses:schedule` blocks; import of ORI's files).
-- `tests/` — stage 0-3 tests of the validation plan (design document 5.4):
+  Radio side: `_workbench.py` (finds the Workbench clone and imports its shared
+  `dses_radio.py`), `radio.py` (`EveRadio`: one B210 for both directions,
+  reference and PPS, UTC time on a PPS edge, verified LO-offset tuning, rate
+  readback, GPIO keying), `gr_blocks.py` (`EveToneSource`, the schedule-driven
+  tone source with a `tx_time` tag; `RxDecimator`, the two-stage front end;
+  `EveRxSink`, the per-window archive writer with gap padding), `station.py`
+  (`Session`: keyer with T_lead/T_lag, PA duty interlocks, abort, one flowgraph
+  for the whole session, session log; `SimRadio` for the software bench).
+- `tools/` — `eve_session.py` (plan a session from Horizons, run a schedule on
+  the radio, or `sim` it), `eve_decode.py` (offline decode of an archive, the
+  decision of record), `eve_bench.py` (B210 loopback: transmit at minimum gain,
+  receive the internal leakage, archive, decode).
+- `tests/` — stage 0-4 tests of the validation plan (design document 5.4):
   Appendix C vectors, galois cross-check, ORI-equation match, loopback on all
   variants, channel calibration, model agreement; conjunction-day geometry
   against the document, schedule contract, sync, Doppler pre-compensation,
-  repeat-and-combine, SigMF round trip.
+  repeat-and-combine, SigMF round trip; the session engine through the software bench.
 - `link_budget/` — the ORI link-budget classes and the DSES cases behind the
   document's tables.
 
@@ -49,7 +61,8 @@ Project-local conda env, like the Workbench:
 
     C:\ProgramData\radioconda\Scripts\conda.exe env create --prefix .\.conda -f environment.yml
     conda activate .\.conda          (numpy's BLAS needs the env's Library\bin on PATH)
-    python -m pytest tests -q
+    python -m pytest tests -q            # 35 tests, ~80 s
+    python tools/eve_bench.py             # B210 loopback, ~1 min, no antenna needed
     .conda\python.exe -m eve.montecarlo                 # ORI-style link table, Variant A
     .conda\python.exe -m eve.montecarlo --variant B
 

@@ -247,6 +247,18 @@ def compute_astropy(target: str, site: Site, t_start: TimeLike, t_stop: TimeLike
                           source=f"astropy:{ephemeris}")
 
 
+# ---- synthetic table (bench and simulation) -------------------------------------------------
+def synthetic_table(target: str, site: Site, t_start: TimeLike, t_stop: TimeLike, range_km: float,
+                    range_rate_km_s: float = 0.0, el_deg: float = 45.0, step_s: float = 1.0) -> EphemerisTable:
+    """A constant-range (optionally constant range-rate) table for the software bench and
+    the B210 loopback: e.g. range 375,000 km gives the Moon's 2.5 s round trip."""
+    t0, t1 = to_unix(t_start), to_unix(t_stop)
+    tt = np.arange(t0, t1 + 0.5 * step_s, step_s)
+    rng = range_km + range_rate_km_s * (tt - t0)
+    return EphemerisTable(target.lower(), site, tt, rng, np.full(tt.size, range_rate_km_s),
+                          np.full(tt.size, 180.0), np.full(tt.size, el_deg), source="synthetic")
+
+
 # ---- the model --------------------------------------------------------------------------
 class DopplerModel:
     """Round trip and Doppler from one table (monostatic) or two (bistatic: tx table for

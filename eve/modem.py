@@ -187,20 +187,27 @@ class ToneSynthesizer:
     def generate(self, n_samples: int) -> np.ndarray:
         n = np.arange(self.n, self.n + n_samples, dtype=np.float64)
         k = self.frame_of_samples(n)
-        # tone per frame within this block (frames are long: few distinct values)
         k0, k1 = int(k[0]), int(k[-1])
-        tones = self.map.tones(k0, k1)
-        d = tones[k - k0]
-        on = d != OFF
-        f = self.f_base + np.where(on, d, 0) * self.p.spacing
+        tones = self.map.tones(k0, k1)[k - k0]
+        return self.generate_with_tones(n, tones)
+
+    def generate_with_tones(self, n: np.ndarray, tones: np.ndarray) -> np.ndarray:
+        """Samples for absolute sample indices n (contiguous, continuing the stream) with
+        the tone index given per sample (OFF = silent, phase held). This is the engine
+        behind generate(); the schedule-driven radio source calls it with tones looked
+        up from device time."""
+        n = np.asarray(n, dtype=np.float64)
+        tones = np.asarray(tones, dtype=np.int64)
+        on = tones != OFF
+        f = self.f_base + np.where(on, tones, 0) * self.p.spacing
         if self.f_extra is not None:
             f = f + self.f_extra(n / self.fs)
         dphi = 2.0 * np.pi * f / self.fs
         dphi = np.where(on, dphi, 0.0)          # hold phase while off
         phi = self.phase + np.cumsum(dphi)
         out = np.where(on, self.amp * np.exp(1j * (phi - dphi)), 0.0)   # phase at sample start
-        self.phase = float(np.mod(phi[-1], 2.0 * np.pi))
-        self.n += n_samples
+        self.phase = float(np.mod(phi[-1], 2.0 * np.pi)) if n.size else self.phase
+        self.n = int(n[-1]) + 1 if n.size else self.n
         self.samples_on += int(on.sum())
         return out.astype(self.dtype)
 

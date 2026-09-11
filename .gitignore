@@ -10,3 +10,8 @@ docs/*.docx
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# session products
+archive/
+archive_*/
+sessions/
