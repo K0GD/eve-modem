@@ -175,7 +175,7 @@ def fig_blocks():
                       "-f_D(t) pre-compensation", fs=6.5)
     box(30, 40, 16, 8, "USRP B210\nTX/RX A  ->\nRX2 A  <-\nGPIO key", fc="#FFF4E8", ec=VERM,
         bold=True, fs=6.8)
-    box(52, 40, 14, 8, "PA chain\n(Class C)\n+ sequencer", fs=6.8)
+    box(52, 40, 14, 8, "2 W driver\n+ 1200 W SSPA\n+ sequencer", fs=6.8)
     box(72, 40, 12, 8, "feed\n2304 MHz", fs=6.8)
     box(88, 42, 10, 4, "Venus", fc="#EEF5EE", ec=TEAL, bold=True)
     arrow(30, 55, 13, 48)                       # schedule -> TX NCO source
@@ -241,8 +241,8 @@ def fig_variants():
         ax.plot(cn0, fer, color=col, ls=ls, lw=2, label=label)
     ax.axhline(0.1, color=GREY, lw=0.8, ls=":")
     ax.text(-4.9, 0.12, "10 % frame error rate", fontsize=7.5, color=GREY)
-    ax.axvspan(-5.0, -3.3, color="#F3E6DE", zorder=0)
-    ax.text(-4.15, 0.62, "DSES 23 cm\nmonostatic\n(1000-1500 W)", fontsize=7.5, color=VERM, ha="center")
+    ax.axvspan(-5.4, -4.2, color="#F3E6DE", zorder=0)   # 1200 W: date-resolved to static albedo
+    ax.text(-4.8, 0.62, "DSES 23 cm\nmonostatic\n1200 W", fontsize=7.5, color=VERM, ha="center")
     ax.set_xlabel("C/N0 (dB-Hz)"); ax.set_ylabel("frame error rate (11 symbols)")
     ax.set_ylim(0, 1.02); ax.set_xlim(cn0.min(), cn0.max())
     ax.set_title("Matched 1.5 Hz bins buy about 1.1 dB at the same symbol length (AWGN model)", fontsize=9)

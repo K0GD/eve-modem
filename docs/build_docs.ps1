@@ -17,5 +17,5 @@ python (Join-Path $here 'make_figures.py')
     --docx  (Join-Path $here 'DSES_EVE_Modem_Design_and_ICD.docx') `
     --title 'Earth-Venus-Earth Modem' `
     --subtitle 'Design Description and Interface Control Document' `
-    --version 'Rev A - DRAFT' `
+    --version 'Rev B - DRAFT' `
     --header-logo $logo --force

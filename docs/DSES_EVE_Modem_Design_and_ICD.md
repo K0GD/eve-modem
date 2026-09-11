@@ -4,11 +4,11 @@
 | | |
 |---|---|
 | Document | DSES EVE Modem Design and ICD |
-| Revision | Rev A — DRAFT for team review |
-| Date | 2026-09-10 |
+| Revision | Rev B — DRAFT, team review comments incorporated |
+| Date | 2026-09-11 |
 | Prepared by | Rick Hambly, K0GD, Deep Space Exploration Society |
 | Waveform design | Pete Wyckoff, KA3WCA, Open Research Institute ("Venus Bounce Transmitter Spiral #2") |
-| Status | Design baseline; parameters marked TBC await confirmation from ORI. Draft 2 adds the band plan of 2026-09-10 (23 cm at 1299.5 MHz for Venus 2026; 13 cm later; EME on both bands without amplifiers) |
+| Status | Design baseline; parameters marked TBC await confirmation from ORI. Rev B incorporates the review comments of 2026-09-10 from Michelle Thompson (ORI: the notebook's date-resolved distance and Venus albedo) and Alex Nersesian (DSES: the 23 cm station chain, with the transverter bypassed, the 1200 W amplifier, and the items the station must build) |
 
 This document describes the DSES implementation of the ORI Earth-Venus-Earth (EVE)
 waveform for the Venus inferior conjunction of 24 October 2026, and it defines every
@@ -30,7 +30,9 @@ GPL-3.0 and is credited to Pete Wyckoff and ORI wherever it is used.
 The DSES 60-foot dish at Haswell, Colorado, will attempt to bounce a digital message off Venus near
 inferior conjunction and decode the echo. ORI designed the waveform and validated it in
 simulation, and ORI has a transmit-side generator that writes the waveform to a SigMF file
-for playback through a USRP B210 in GNU Radio. ORI has no receiver. DSES needs a complete,
+for playback through a USRP B210 in GNU Radio. ORI had no receiver when this document was
+started; a receiver by the DEFCON group working with ORI was under over-the-air test as of
+10 September and is expected in the ORI repository (O14). DSES still needs a complete,
 runnable modem: a transmitter that fits the DSES station's duty cycle and keying, a receiver
 that decodes echoes, and the synchronization, Doppler, and scheduling machinery that the
 reference design assumes away.
@@ -48,9 +50,14 @@ The design decisions in this revision:
   quantity is computed per schedule (section 2.4).
 - **Monostatic operation is the baseline**, with reception by a European station as the
   upside case at 1299.5 MHz. Computed with ORI's own link-budget classes at the 2026
-  distance, the 23 cm monostatic link is 3 to 5 dB below the design point (section 2.2);
-  the DSES matched-bin variant, repeat-and-combine over a session, and any European
-  receiver each claw part of that back.
+  distance, the 23 cm monostatic link with the station's 1200 W amplifier is 4.2 dB below
+  the design point at ORI's static Venus albedo and 5.4 dB below at ORI's date-resolved
+  albedo for conjunction (section 2.2); the DSES matched-bin variant, repeat-and-combine
+  over a session, and any European receiver each claw part of that back.
+- **The B210 drives the 23 cm amplifier directly.** The EVE25 package's built-in
+  transverter covers only 1296 to 1298 MHz, so it is bypassed: the B210 generates 1299.5
+  MHz, a 2 W driver raises it to the level the final amplifier needs, and the 1200 W SSPA
+  covers 1280 to 1300 MHz (Alex Nersesian, 10 September; sections 2.3 and 7.1).
 - **A DSES-only 23 cm variant of the waveform is defined** (Variant B: 1.5 Hz bins matched
   to the 23 cm Doppler spread, same symbol length), worth about 1.1 dB and selectable per
   schedule. ORI's waveform (Variant A) remains the interoperable one (sections 2.4, 6.1).
@@ -111,10 +118,13 @@ ORI notebook into `link_budget/ori_link_budget.py` and driven by `link_budget/ds
 in this project, so the table is reproducible with one command when a station number
 changes. Inputs: the ORI site dataclasses (DSES 18.29 m at 69 percent, 0.5 dB line losses,
 0.4 dB LNA, 30° elevation; Dwingeloo 25 m; Effelsberg 100 m, receive only), ORI's system
-noise model, Venus radar albedo 0.152, clear sky, and the Earth-Venus distance of
-2026-10-24, 40.8 million km. The notebook's own headline number uses a generic 38 million
-km "minimum distance"; the extra 2.8 million km on conjunction day costs 1.2 dB, which is
-why the anchor row differs from the rows that matter.
+noise model, ORI's static Venus radar albedo 0.152, clear sky, and the Earth-Venus distance
+of 2026-10-24, 40.8 million km. That distance agrees with the notebook's own ephemeris: its
+date-resolved cells compute the Earth-Venus distance with Skyfield and JPL Horizons, 40.81
+million km on 2026-10-25 (Michelle Thompson, 2026-09-10). Only the notebook's opening
+printout, which brackets the orbit at 38 and 261 million km, is at a fixed distance; the
+anchor row reproduces that printout to show the extraction is faithful, and the 2.8 million
+km between the bracket and conjunction day is worth 1.2 dB.
 
 <!-- widths: 3.0,0.8,0.6,0.8,1.5 -->
 | Case (2026-10-24 distance unless noted) | C/N0 (dB-Hz) | Tsys (K) | Margin to 0 dB-Hz | Basis |
@@ -122,52 +132,77 @@ why the anchor row differs from the rows that matter.
 | DSES monostatic, 2304 MHz, 1500 W, at the notebook's 38 million km | +1.7 | 76 | +1.7 | anchor: reproduces the notebook's +1.67 |
 | DSES monostatic, 2304 MHz, 1500 W | +0.4 | 76 | +0.4 | 13 cm package, next apparition |
 | DSES monostatic, 2400 MHz, 1500 W | +0.7 | 78 | +0.7 | 13 cm alternative band |
-| **DSES monostatic, 1299.5 MHz, 1500 W** | **−3.3** | 57 | −3.3 | 23 cm package; power TBC (O2) |
-| **DSES monostatic, 1299.5 MHz, 1000 W** | **−5.0** | 57 | −5.0 | 23 cm package; power TBC (O2) |
-| DSES monostatic, 1299.5 MHz, 500 W | −8.0 | 57 | −8.0 | 23 cm package; power TBC (O2) |
+| DSES monostatic, 1299.5 MHz, 1500 W | −3.3 | 57 | −3.3 | 23 cm, for comparison: the station amplifier is rated 1200 W |
+| **DSES monostatic, 1299.5 MHz, 1200 W** | **−4.2** | 57 | −4.2 | **23 cm package: SSPA rated 1200 W CW (Alex Nersesian, 2026-09-10); power delivered at 1299.5 MHz TBC (O2)** |
+| DSES monostatic, 1299.5 MHz, 1000 W | −5.0 | 57 | −5.0 | 23 cm, if the amplifier delivers less than rated |
+| DSES monostatic, 1299.5 MHz, 500 W | −8.0 | 57 | −8.0 | 23 cm, half power |
 | Dwingeloo monostatic, 1299.5 MHz, 1000 W (cross-check) | −0.9 | 76 | −0.9 | CAMRAS measured +0.65 in March 2025: the model is about 1.5 dB conservative |
-| DSES 1500 W transmits, Dwingeloo 25 m receives | −1.8 | 76 | −1.8 | Stockert (25 m) similar |
+| DSES 1200 W transmits, Dwingeloo 25 m receives | −2.8 | 76 | −2.8 | Stockert (25 m) similar |
 | DSES 1000 W transmits, Dwingeloo 25 m receives | −3.6 | 76 | −3.6 | |
-| DSES 1500 W transmits, Effelsberg 100 m receives | +11.9 | 52 | +11.9 | opportunistic; ORI's Effelsberg proposal |
+| DSES 1200 W transmits, Effelsberg 100 m receives | +10.9 | 52 | +10.9 | opportunistic; ORI's Effelsberg proposal |
 | DSES 1000 W transmits, Effelsberg 100 m receives | +10.1 | 52 | +10.1 | |
 | 2028 apparition, 44.5 million km: DSES monostatic, 2304 MHz, 1500 W | −1.1 | 76 | −1.1 | 13 cm package; a week either side of conjunction |
 | 2028: DSES monostatic, 2400 MHz, 1500 W | −0.8 | 78 | −0.8 | |
 | 2028: DSES monostatic, 1299.5 MHz, 1500 W | −4.8 | 57 | −4.8 | 23 cm, for comparison |
 | 2028: DSES 1500 W at 2304 MHz transmits, Effelsberg receives | +13.9 | 73 | +13.9 | |
 
+**Venus albedo.** The rows above use the notebook's static radar albedo, 0.152, the value
+behind the CAMRAS cross-check. The notebook now also integrates the Magellan reflectivity
+map over the hemisphere facing Earth on each date (its "Spatially-Resolved" and "Dynamic
+Venus Radar Albedo" cells). For the October 2026 conjunction the sub-Earth point falls on
+plains and the effective albedo is 0.117, 1.1 dB below the static value; the notebook's
+own sensitivity sweep shows the result barely depends on the backscatter model (0.15 dB
+from Lambertian to near-specular). DSES carries both: 0.152 as the validated planning
+value and 0.117 as the physically motivated pessimistic case (D17, O15).
+
+<!-- widths: 2.6,1.4,1.4,1.3 -->
+| Case, 2026-10-24 | Albedo 0.152 (static) | Albedo 0.117 (date-resolved) | Difference |
+|---|---|---|---|
+| DSES monostatic, 2304 MHz, 1500 W | +0.4 dB-Hz | −0.7 dB-Hz | −1.1 dB |
+| DSES monostatic, 1299.5 MHz, 1500 W | −3.3 | −4.4 | −1.1 |
+| **DSES monostatic, 1299.5 MHz, 1200 W** | **−4.2** | **−5.4** | −1.1 |
+| DSES monostatic, 1299.5 MHz, 1000 W | −5.0 | −6.2 | −1.1 |
+| DSES monostatic, 1299.5 MHz, 500 W | −8.0 | −9.2 | −1.1 |
+
 Pete Wyckoff sized the waveform for C/N0 = 0 dB-Hz. Read against that:
 
 - **13 cm, when that package exists**, closes with under a decibel of margin at the 2026
   distance; the notebook's +1.7 dB was at a shorter range than the conjunction offers.
-- **23 cm in 2026 does not close in a single monostatic pass.** With 1500 W the shortfall
-  is 3.3 dB, with 1000 W it is 5.0 dB, before solar noise. Three things recover it, and
-  the plan uses all three: the DSES Variant B waveform is worth about 1.1 dB (section
-  2.4); repeat-and-combine over five passes in the 5.75-hour window is worth 7 dB
-  (section 4.5); and any European station receiving with the DSES schedule file changes
-  the picture on its own, Dwingeloo or Stockert by 1.5 dB and Effelsberg by 15 dB.
+- **23 cm in 2026 does not close in a single monostatic pass.** With the station's 1200 W
+  amplifier the shortfall is 4.2 dB, or 5.4 dB at the date-resolved albedo, before solar
+  noise. Three things recover it, and the plan uses all three: the DSES Variant B
+  waveform is worth about 1.1 dB (section 2.4); repeat-and-combine over five passes in
+  the 5.75-hour window is worth 7 dB (section 4.5); and any European station receiving
+  with the DSES schedule file changes the picture on its own, Dwingeloo or Stockert by
+  1.4 dB and Effelsberg by 15 dB.
 - **The model is conservative.** Its Dwingeloo prediction is 1.5 dB below what CAMRAS
   measured in March 2025, so the DSES rows may be pessimistic by a similar amount. That
   is margin to hope for, not to plan on.
-- **Every decibel of the transmit chain matters at 23 cm**: the actual amplifier power
-  (500 W versus 1500 W is 4.8 dB), the feed match, and the receiver Tsys are the open
-  items that decide where in the table DSES lands (O2).
+- **Every decibel of the transmit chain matters at 23 cm**: the power the amplifier
+  actually delivers at 1299.5 MHz, which sits 0.5 MHz inside the top of its 1280 to 1300
+  MHz range, under the chunk duty cycle (1200 W rated; 500 W would cost 3.8 dB), the 2 W
+  driver's headroom, the feed match, and the receiver Tsys are the open items that decide
+  where in the table DSES lands (O2, O4).
 
 **Will monostatic 23 cm succeed in 2026?** Yes, on the model, provided the 23 cm amplifier
-delivers 1000 W or more and the receiver combines passes. The 10 percent frame-error
+delivers close to its 1200 W rating and the receiver combines passes. The 10 percent frame-error
 threshold is −0.6 dB-Hz for Variant A and −1.7 dB-Hz for Variant B (section 2.4).
 Against the single-pass figures above, the passes that must be combined are:
 
-<!-- widths: 1.6,1.5,1.5,2.1 -->
-| 23 cm power | Single pass | Variant B, passes to combine | Margin after 5 passes (+7 dB) |
+<!-- widths: 1.3,1.7,1.9,1.8 -->
+| 23 cm power | Single pass, albedo 0.152 / 0.117 | Variant B, passes to combine | Margin after 5 passes (+7 dB) |
 |---|---|---|---|
-| 1500 W | −3.3 dB-Hz | 2 (+3.0 dB) | +5.4 dB |
-| 1000 W | −5.0 dB-Hz | 3 (+4.8 dB) | +3.7 dB |
-| 500 W | −8.0 dB-Hz | 5 (+7.0 dB), no margin | +0.7 dB |
+| 1500 W | −3.3 / −4.4 dB-Hz | 2 (+3.0 dB) | +5.4 / +4.3 dB |
+| **1200 W (rated)** | **−4.2 / −5.4 dB-Hz** | **2 to 3 (+3.0 to +4.8 dB)** | **+4.5 / +3.3 dB** |
+| 1000 W | −5.0 / −6.2 dB-Hz | 3 (+4.8 dB) | +3.7 / +2.5 dB |
+| 500 W | −8.0 / −9.2 dB-Hz | 5 (+7.0 dB), no margin / does not close | +0.7 / −0.5 dB |
 
 Rayleigh fading (about 1 dB), pointing (0.7 dB two-way), and solar noise at 6° come out of
-those margins, and the model's 1.5 dB conservatism goes back in. At 1500 W the session is
-comfortable; at 1000 W it works with the full window; at 500 W it depends on luck. A
-single European receiver with the schedule file removes the question for that session.
+those margins, and the model's 1.5 dB conservatism goes back in. At the amplifier's 1200 W
+rating the message closes on the second or third pass and keeps 3 to 4.5 dB after all
+five, which is what fading, pointing, and the Sun consume; at 1000 W it works with the
+full window; at 500 W it depends on luck. A single European receiver with the schedule
+file removes the question for that session.
 
 **The 2028 apparition.** The next inferior conjunction is 2028-06-01 at 0.288 AU (43.2
 million km, round trip 288 s), 6 percent farther than 2026 (−0.5 dB), and on that day Venus
@@ -191,7 +226,7 @@ includes that so the margin is stated honestly.
 <!-- widths: 1.6,2.3,2.8 -->
 | Station | Role in October 2026 | Frequency |
 |---|---|---|
-| DSES Haswell, 18.3 m | Transmit and receive (this document) | **1299.5 MHz in 2026** with the 23 cm package (1296 MHz native; retune TBC, O2). 13 cm package (2304 or 2400 MHz) not before the next apparition |
+| DSES Haswell, 18.3 m | Transmit and receive (this document) | **1299.5 MHz in 2026** with the 23 cm package: the B210 generates 1299.5 MHz directly, the package's transverter (1296 to 1298 MHz only) is bypassed, the 1200 W SSPA covers 1280 to 1300 MHz, and the feed retunes (Alex Nersesian, 2026-09-10; section 7.1). 13 cm package (2304 or 2400 MHz) not before the next apparition |
 | Dwingeloo (CAMRAS), 25 m, 1000 W | Transmit and receive, own campaign | 1299.5 MHz only (confirmed by ORI 2026-09-09) |
 | Effelsberg, 100 m | Receive only, opportunistic, secondary to a baseline survey | Follows Dwingeloo; proposal alternates 1299.5 and 2304 MHz |
 | Stockert, 25 m | Receive, own campaign | 1299.5 MHz |
@@ -229,7 +264,7 @@ ORI's own AWGN receiver model: the 10 percent frame-error threshold moves from a
 reach −2.8 dB-Hz, but it halves the passes per session and so loses more in
 repeat-and-combine than it gains; it is kept as a schedule option only.
 
-![Figure 2 — Frame error rate versus C/N0 for ORI's Variant A and the DSES 23 cm Variant B, AWGN chi-square model with 4096 tones and 11 symbols. The shaded band is the DSES 23 cm monostatic link (1000 to 1500 W).](figures/fig_variants.png)
+![Figure 2 — Frame error rate versus C/N0 for ORI's Variant A and the DSES 23 cm Variant B, AWGN chi-square model with 4096 tones and 11 symbols. The shaded band is the DSES 23 cm monostatic link at 1200 W, from the date-resolved to the static albedo (−5.4 to −4.2 dB-Hz).](figures/fig_variants.png)
 
 Variant B is a different signal on the air: a European receiver built to ORI's numbers
 will not decode it. It is therefore used only when DSES is its own receiver; any session
@@ -418,8 +453,8 @@ lands 12 to 16 dB above the design point, so the test is run at the design point
 the B210 output down, or by adding calibrated noise to the archive offline, with no
 amplifier in the chain, on either band, as soon as a feed and a transmit/receive switch at
 the feed exist (O12). This decouples validation of the modulation and protocol from the
-amplifier schedules entirely, which is why it can start before the 23 cm retune and long
-before the 13 cm package.
+amplifier schedules entirely, which is why it can start before the 23 cm driver and
+sequencer exist and long before the 13 cm package.
 
 The EME test proves the schedule and keying at the fastest cadence the design will ever
 use, the GPS timing, the Doppler module with a different target, the receiver, and
@@ -602,7 +637,10 @@ the entries marked TBD need them.
 | Interface | Specification |
 |---|---|
 | Radio | Ettus USRP B210, one unit, owned exclusively by the modem process during a session. Tunes 70 MHz to 6 GHz; the dial frequency is a schedule parameter (1296, 1299.5, 2304, 2400 MHz, and others) |
-| Transmit port | TX/RX A. Venus: to the amplifier drive chain; B210 output [+10 dBm maximum], the modem runs A = 0.8 (−2 dB) at full TX gain unless the drive requirement says otherwise. EME tests: directly to the feed through the transmit/receive switch, no amplifier; output set by TX gain to the wanted C/N0 (section 4.6). TBD: required drive level at each PA input and any pad |
+| Transmit port | TX/RX A. Venus: to the 2 W driver of the amplifier chain below; B210 output [+10 dBm maximum], the modem runs A = 0.8 (−2 dB) at full TX gain unless the driver's input requirement says otherwise. EME tests: directly to the feed through the transmit/receive switch, no amplifier; output set by TX gain to the wanted C/N0 (section 4.6) |
+| Transmit chain, 23 cm | B210 → 2 W driver amplifier (a mandatory station build) → final SSPA in the hub → feed. The final amplifier needs at least 2 W (+33 dBm) at its input (Alex Nersesian, 2026-09-10), 23 dB above the B210's maximum. The SSPA data excerpt reads 1280 to 1300 MHz, 1200 W CW peak output, 20 to 30 W typical input, so the assembly's own driver stage is assumed to sit between the 2 W point and the final pallet; TBC with the station team, together with the pad that keeps the B210 from overdriving the driver (O4). The comb sits 25 to 48.5 kHz above the 1299.5 MHz dial, 0.45 MHz inside the amplifier's upper band edge. The package's built-in transverter (RF 1296 to 1298 MHz, IF 144 to 146 MHz) is not used |
+| Receive chain, 23 cm | Feed → LNA → bandpass filter (optional, recommended by the station team) → RX2 A. The filter keeps out-of-band power off the B210 front end; its passband must cover 1299.5 MHz plus 0 to 50 kHz, and its loss is charged to the receive line loss of the link budget (0.5 dB assumed) |
+| Hub modules | Two of the EVE25 package's three modules are used, the final SSPA and the CMU (its control and monitoring unit); the RF module, which is the transverter, is not (Alex Nersesian, 2026-09-10) |
 | Receive port | RX2 A, from the LNA. RX gain set for the receiver noise to sit 10–15 dB above the B210 floor (verified live with the tone-strip display) |
 | Cabling to the RF package | The B210 has separate transmit and receive ports, so three runs connect it to the RF package in the hub: one coax carrying transmit drive from TX/RX A, one coax carrying the LNA output to RX2 A, and one keying line (Rick, 2026-09-10). TBD: run lengths, losses at 1299.5 and 2304 MHz, and connector types at each end |
 | Sample rate | 32 × modem rate: 1,504,706.56 S/s (Variant A) or 786,432 S/s (Variant B); actual UHD rate read back and the residual absorbed by the frequency tracker |
@@ -616,8 +654,8 @@ the entries marked TBD need them.
 | Interface | Specification |
 |---|---|
 | Keying output | One logic line from the B210 GPIO header (J504, 3.3 V, [FP0 bank, line 0]) through an isolated driver, or a USB relay if the station prefers. Asserted for the whole on-window |
-| Sequencer timing | Key asserted [T_lead = 200 ms] before the first non-zero sample; RF stopped [T_lag = 100 ms] before the key is released. TBD: the station sequencer's actual lead and lag requirements and whether it protects the LNA |
-| Duty limits | The modem enforces T_on ≤ [300 s] and T_off ≥ [240 s] per chunk regardless of the schedule; a schedule violating them is refused. TBD: the amplifiers' true thermal limits and whether 4-minute chunks are acceptable |
+| Sequencer timing | Key asserted [T_lead = 200 ms] before the first non-zero sample; RF stopped [T_lag = 100 ms] before the key is released. The station builds an LNA sequencer and an LNA DC control circuit, both mandatory (Alex Nersesian, 2026-09-10); TBD: their input line type and actual lead and lag requirements (O5) |
+| Duty limits | The modem enforces T_on ≤ [300 s] and T_off ≥ [240 s] per chunk regardless of the schedule; a schedule violating them is refused. TBD: the amplifier's true thermal limits and whether 4-minute chunks are acceptable. The thermal test needs a 2 kW 50 Ω load with a 7/16 DIN connector, which the station does not yet have (O6) |
 | Abort | Operator abort or any fault (reference unlock, underrun burst, USB error) releases the key immediately and logs the frame number |
 | EME cadence | Monostatic Moon operation alternates transmit and receive every ≤ 2.5 s. TBD: whether the station's transmit/receive switching can follow that; if not, EME runs bistatic with a second receive antenna, or DSES transmits only and a partner receives |
 
@@ -626,7 +664,7 @@ the entries marked TBD need them.
 <!-- widths: 1.2,5.5 -->
 | Interface | Specification |
 |---|---|
-| Feed | 23 cm feed (1296 / 1299.5 MHz) for 2026; 13 cm feed (2304 / 2400 MHz) when that package exists. A feed change is a station operation; the modem does not control feeds |
+| Feed | 23 cm feed retuned from 1296 to 1299.5 MHz for 2026 (an easy retune per Alex Nersesian, 2026-09-10); 13 cm feed (2304 / 2400 MHz) when that package exists. A feed change is a station operation; the modem does not control feeds |
 | Pointing | The modem does not steer the dish. It computes and displays Venus azimuth and elevation from the ephemeris for the operator. The measured 0.15° boresight offset is 0.7 dB two-way at 23 cm (0.88° beam) and 2.2 dB at 13 cm (0.50° beam); the pointing corrections memo of 2026-09-07 covers it |
 
 # 8. ICD part C — data and files
@@ -729,6 +767,8 @@ code-sharing boundary, not a runtime one:
 | D13 | Variant B (1.5 Hz bins, 247 frames) defined for DSES monostatic 23 cm; Variant A for any session with a partner receiver | +1.1 dB where DSES needs it most; schedule names the variant |
 | D14 | Message text = K0PRT K0PRT, a schedule parameter | Station callsign, fills the 90-bit field exactly |
 | D15 | Link budget rows come from ORI's own classes, run by `link_budget/dses_cases.py` at the 2026 distance | Reproducible; one command when a station number changes |
+| D16 | The B210 generates 1299.5 MHz directly; the EVE25 transverter is bypassed and a 2 W driver feeds the final SSPA | The transverter covers 1296 to 1298 MHz only; the SSPA covers 1280 to 1300 MHz (Alex Nersesian and Rick, 2026-09-10) |
+| D17 | The link budget is stated at ORI's static albedo (0.152) and at ORI's date-resolved albedo for conjunction (0.117) | Michelle Thompson's review of 2026-09-10: the notebook resolves distance and albedo per date; DSES plans on the value behind the CAMRAS cross-check and carries the 1.1 dB pessimistic case |
 
 ## 10.2 Open issues
 
@@ -736,11 +776,11 @@ code-sharing boundary, not a runtime one:
 | # | Issue | Owner | Needed by |
 |---|---|---|---|
 | O1 | Confirm R_bw = 2.87 Hz and N_frames = 473 (vs 440 on the slide, 540 in MATLAB) | Pete Wyckoff / ORI | Before stage 2 |
-| O2 | 23 cm package: can it be retuned from 1296 to 1299.5 MHz; its power and Tsys (1500 W gives −3.3 dB-Hz monostatic, 1000 W −5.0, 500 W −8.0) | DSES station team | Before Venus |
+| O2 | 23 cm amplifier: the power actually delivered at 1299.5 MHz (rated 1200 W CW, −4.2 dB-Hz monostatic; the frequency is 0.5 MHz inside the top of its 1280 to 1300 MHz range) under the chunk duty cycle, and the receive Tsys. The retune question is closed: transverter bypassed, feed retunes (D16) | DSES station team (Alex, Roger) | Before Venus |
 | O3 | GPSDO at Plishner: model, 10 MHz level, PPS availability, cabling to the B210 | DSES station team | Before EME test |
-| O4 | PA drive level required at the amplifier input; pad or preamp between B210 and PA | DSES station team | Before bench stage 4 |
-| O5 | Keying interface: sequencer input type, lead/lag, LNA protection; whether 2.5 s alternation is possible for monostatic EME | DSES station team | Before EME test |
-| O6 | PA thermal limits: are 4-minute chunks with 4.5-minute cooldown acceptable for a 6-hour session? | DSES station team | Before Venus |
+| O4 | Drive chain: the final amplifier needs at least 2 W (+33 dBm), so a 2 W driver between the B210 (+10 dBm) and the PA is a mandatory build. Reconcile with the SSPA excerpt's 20 to 30 W typical input (where the assembly's own driver sits), and fix the pad so the B210 cannot overdrive the driver | DSES station team | Before bench stage 4 |
+| O5 | Keying interface: the station builds the LNA sequencer and the LNA DC control (mandatory); needed from them are the input line type, lead and lag, and whether 2.5 s alternation is possible for monostatic EME | DSES station team | Before EME test |
+| O6 | PA thermal limits: are 4-minute chunks with 4.5-minute cooldown acceptable for a 6-hour session? The test needs a 2 kW 50 Ω load with a 7/16 DIN connector, not yet on hand | DSES station team | Before Venus |
 | O7 | Solar noise at 6° separation: Tsys increase on top of the 23 cm shortfall (section 2.2) | Link budget (DSES / ORI) | Before Venus |
 | O8 | Whether ORI wants the receiver contributed back to `Python_Implementation` | ORI | After EME |
 | O9 | Bistatic sessions with Effelsberg: if offered, the exact mutual window and who compensates Doppler | ORI / DSES | If offered |
@@ -748,6 +788,8 @@ code-sharing boundary, not a runtime one:
 | O11 | Tell ORI about Variant B (DSES-only 23 cm parameters, D13) and ask whether they want it in their generator as an option | DSES → ORI | Before EME test |
 | O12 | Transmit/receive switch at the feed for direct-B210 EME tests: relay type, LNA protection, switching time for the 2.5 s alternation | DSES station team | Before EME test |
 | O13 | 13 cm band: 2304 or 2400 MHz, and the feed for it | DSES station team | Next apparition |
+| O14 | The DEFCON group's receiver (over-the-air test and code check-in expected the weekend of 2026-09-12): obtain it when it lands in the ORI repository and cross-check it against the DSES receiver with the Appendix C test vector | DSES / ORI | When published |
+| O15 | Date-resolved albedo: ask ORI for ρ_eff on the March 2025 CAMRAS dates, to learn whether the validated value already reflects it, and for the 2028 window; raise at the ORI meetup of 2026-09-15 | DSES → ORI | Before Venus |
 
 # Appendix A — MATLAB simulation versus Python implementation
 
@@ -819,3 +861,4 @@ as symbols 4 to 6, because 48 bits of message repeat exactly 48 bits later.
 | Rev A draft 3 | 2026-09-10 | Rick's review: link budget recomputed row by row with ORI's classes at the 2026 distance (`link_budget/`); Variant B for DSES 23 cm monostatic (2.4, 6.1.1, Figure 2, D13); message K0PRT K0PRT and Appendix C test vector (D14); US spelling; table and paragraph pagination rules; narrower register columns |
 | Rev A draft 4 | 2026-09-10 | Table pagination (header keeps with first row, short tables whole); the monostatic-23 cm verdict with passes to combine; the 2028 apparition (geometry and link budget); beamwidth figures corrected (0.88° at 23 cm, 0.50° at 13 cm) |
 | Rev A draft 5 | 2026-09-10 | Issued to the EVE team for review (nine recipients, 17:57 MDT); section 7.1 gains the B210-to-RF-package cabling row (two coax plus key line) from the issuing email |
+| Rev B | 2026-09-11 | Team review comments incorporated. Michelle Thompson (ORI): the notebook's date-resolved distance (Skyfield, 40.81 million km on 2026-10-25) and dynamic Venus albedo (0.117 at conjunction, −1.1 dB) in section 2.2 (D17, O15); ORI's DEFCON-group receiver noted (section 1, O14). Alex Nersesian (DSES): the transverter covers 1296 to 1298 MHz only and is bypassed (D16); SSPA 1280 to 1300 MHz, 1200 W CW, at least 2 W drive; LNA sequencer, LNA DC control, 2 W driver, and receive bandpass filter to be built; a 2 kW 7/16 DIN load for the thermal test; the feed retunes (sections 2.3, 7.1 to 7.3, O2, O4 to O6). 1200 W rows in the link budget and Figure 2 |
