@@ -37,7 +37,7 @@ radio classes into an importable module, not by living in one file.
 
 Project-local conda env, like the Workbench:
 
-    C:\ProgramDataadioconda\Scripts\conda.exe env create --prefix .\.conda -f environment.yml
+    C:\ProgramData\radioconda\Scripts\conda.exe env create --prefix .\.conda -f environment.yml
     .conda\python.exe -m pytest tests -q
     .conda\python.exe -m eve.montecarlo                 # ORI-style link table, Variant A
     .conda\python.exe -m eve.montecarlo --variant B
