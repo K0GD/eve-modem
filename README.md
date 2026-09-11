@@ -26,10 +26,20 @@ radio classes into an importable module, not by living in one file.
   (symbol packing, frame map, phase-continuous streaming synthesizer, FFT-bank
   receiver and accumulators), `channel.py` (Pete's channel.m plus a streaming
   channel with Doppler ramp, gaps, timing offset), `montecarlo.py` (ORI's
-  chi-square model, Pete's frame channel, whole-message streaming FER).
-- `tests/` — stage 0-2 tests of the validation plan (design document 5.4):
+  chi-square model, Pete's frame channel, whole-message streaming FER),
+  `doppler.py` (JPL Horizons primary, astropy fallback; round trip, two-way
+  Doppler, elevation, visibility), `schedule.py` (the section 8.1 JSON
+  contract: chunk planning against the round trip and the amplifier duty
+  limits, frame-to-time map, validation), `sync.py` (pilot frequency and
+  presence, whole-frame epoch check, known-symbol and blind grid search,
+  block-accumulating frequency tracker, window receiver, repeat-and-combine
+  across passes), `sigmf_io.py` (ORI-format export with the `ori:design` and
+  `dses:schedule` blocks; import of ORI's files).
+- `tests/` — stage 0-3 tests of the validation plan (design document 5.4):
   Appendix C vectors, galois cross-check, ORI-equation match, loopback on all
-  variants, channel calibration, model agreement.
+  variants, channel calibration, model agreement; conjunction-day geometry
+  against the document, schedule contract, sync, Doppler pre-compensation,
+  repeat-and-combine, SigMF round trip.
 - `link_budget/` — the ORI link-budget classes and the DSES cases behind the
   document's tables.
 
@@ -38,7 +48,8 @@ radio classes into an importable module, not by living in one file.
 Project-local conda env, like the Workbench:
 
     C:\ProgramData\radioconda\Scripts\conda.exe env create --prefix .\.conda -f environment.yml
-    .conda\python.exe -m pytest tests -q
+    conda activate .\.conda          (numpy's BLAS needs the env's Libraryin on PATH)
+    python -m pytest tests -q
     .conda\python.exe -m eve.montecarlo                 # ORI-style link table, Variant A
     .conda\python.exe -m eve.montecarlo --variant B
 

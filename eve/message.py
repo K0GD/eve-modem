@@ -60,7 +60,7 @@ def bits_to_text(bits) -> str:
     if nbytes == 0:
         return ""
     raw = np.packbits(b[: nbytes * 8]).tobytes()
-    return raw.rstrip(b"\x00").decode("ascii", "replace")
+    return raw.rstrip(b"\x00").decode("ascii", "replace").replace(chr(0xFFFD), "?")
 
 
 def build_payload(text: str) -> np.ndarray:
