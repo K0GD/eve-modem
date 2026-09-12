@@ -39,3 +39,5 @@ dependencies:
     - galois
     # SigMF interchange with ORI's files (sigmf_io.py)
     - sigmf
+    # Leo Bodnar GPS reference clock over USB HID (eve/gpsdo.py)
+    - hidapi

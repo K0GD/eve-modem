@@ -322,6 +322,20 @@ class OperatorWindow(QtWidgets.QMainWindow):
                 txt = getattr(self.radio, "status_text", lambda: "radio")()
         except Exception as e:
             txt = f"radio status unavailable: {e}"
+        try:
+            from . import gpsdo as _gpsdo
+            g = getattr(self, "_gpsdo", None)
+            if g is None and not getattr(self, "_gpsdo_absent", False):
+                try:
+                    g = self._gpsdo = _gpsdo.LeoBodnarGPSDO()
+                except Exception:
+                    self._gpsdo_absent = True
+            if g is not None:
+                st = g.status(500)
+                txt += (f"\nGPS clock {g.serial}: sat {'LOCK' if st.sat_lock else 'no lock'}, "
+                        f"PLL {'LOCK' if st.pll_lock else 'no lock'}, signal losses {st.loss_count}")
+        except Exception as e:
+            txt += f"\nGPS clock: {e}"
         self.lbl_radio.setText(txt)
         try:
             now = self.radio.device_time()

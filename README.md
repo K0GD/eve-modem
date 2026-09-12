@@ -46,6 +46,9 @@ radio classes into an importable module, not by living in one file.
   `display.py` (`OperatorWindow`, PySide6 + pyqtgraph: tone strip, accumulated
   metric of the current symbol, running decisions with margins, chunk and keying
   state, radio status, ephemeris, abort; `--display` on the session and bench tools).
+  `gpsdo.py` (Leo Bodnar GPS reference clock over USB HID: status, configuration,
+  exact divider planner, setup and lock check; `--gpsdo` on the session and bench
+  tools; bench note in `docs/bench/`).
 - `tools/` — `eve_session.py` (plan a session from Horizons, run a schedule on
   the radio, or `sim` it), `eve_decode.py` (offline decode of an archive, the
   decision of record), `eve_bench.py` (B210 loopback: transmit at minimum gain,

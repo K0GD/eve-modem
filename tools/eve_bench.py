@@ -53,12 +53,20 @@ def main(argv=None):
     ap.add_argument("--archive", default="archive_bench")
     ap.add_argument("--lead", type=float, default=15.0, help="seconds from now to the first chunk (>= arm lead 8 s + margin)")
     ap.add_argument("--display", action="store_true", help="operator display (PySide6)")
+    ap.add_argument("--gpsdo", action="store_true", help="set up and check the Leo Bodnar GPS clock first")
     a = ap.parse_args(argv)
 
     p = replace(EveParams.named(a.variant), n_frames=a.n_frames, pilot_frames=a.pilot_frames)
     site = D.DSES_HASWELL
     cfg = RadioConfig(serial=a.serial, f_dial_hz=a.f_dial, tx_gain_db=a.tx_gain, rx_gain_db=a.rx_gain,
                       clock_source=a.clock, require_ref_lock=(a.clock != "internal"), lo_offset_hz=a.lo_offset)
+    if a.gpsdo:
+        from eve import gpsdo
+        rep = gpsdo.preflight()
+        print("GPS clock:", rep["config"], "| locked", rep["locked"])
+        if not rep["locked"]:
+            print("GPS clock not locked; refusing to start", file=sys.stderr)
+            return 3
     radio = EveRadio(p, cfg)
     st = radio.open()
     print(st.summary())

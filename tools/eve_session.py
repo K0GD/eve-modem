@@ -80,6 +80,13 @@ def cmd_run(a):
     if a.now:
         sched = _shift_to_now(sched, model, 8.0)
     print(S.describe(sched, model))
+    if a.gpsdo:
+        from eve import gpsdo
+        rep = gpsdo.preflight()
+        print("GPS clock:", rep["config"], "| locked", rep["locked"])
+        if not rep["locked"]:
+            print("GPS clock not locked; refusing to start", file=sys.stderr)
+            return 3
     cfg = RadioConfig(serial=a.serial, f_dial_hz=sched.f_dial_hz, tx_gain_db=a.tx_gain, rx_gain_db=a.rx_gain,
                       clock_source=a.clock, time_source=a.time_source, require_ref_lock=not a.no_ref_check,
                       lo_offset_hz=a.lo_offset)
@@ -176,6 +183,7 @@ def main(argv=None):
     rn.add_argument("--rx-doppler", action="store_true", help="remove the model Doppler on receive (not the pre-compensated receiver)")
     rn.add_argument("--no-precomp", action="store_true")
     rn.add_argument("--now", action="store_true", help="shift the schedule to start 8 s from now")
+    rn.add_argument("--gpsdo", action="store_true", help="set up and check the Leo Bodnar GPS clock (10 MHz, lock) before opening the radio")
     rn.add_argument("--display", action="store_true", help="operator display (PySide6)")
     rn.add_argument("--screenshot", default=None, help=argparse.SUPPRESS)
     rn.add_argument("--screenshot-after", type=float, default=20.0, help=argparse.SUPPRESS)
