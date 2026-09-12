@@ -1,0 +1,204 @@
+# Earth-Venus-Earth Modem — Operator's Guide
+
+<!-- widths: 1.4,5.3 -->
+| | |
+|---|---|
+| Document | DSES EVE Modem Operator's Guide |
+| Revision | Rev A — DRAFT |
+| Date | 2026-09-12 |
+| Prepared by | Rick Hambly, K0GD, Deep Space Exploration Society |
+| Companion | DSES EVE Modem Design Description and ICD (Rev C): the why behind every setting |
+| Where it lives | This text is the application's Help → Operator's guide, and `docs/DSES_EVE_Modem_Operators_Guide.pdf` |
+
+This guide is for the person at the keyboard at Haswell. It says what to connect, what
+to click, what to watch, and what to do when something is wrong. The design document
+explains the reasons; this one gives the steps.
+
+# 1. What the program does
+
+The DSES EVE modem sends an 11-symbol message (K0PRT K0PRT) as one tone at a time out
+of 4096 possible tones, bounces it off the Moon or Venus, and decides which tones came
+back. One symbol lasts 164.8 seconds (473 frames of 0.35 s); a whole message takes 30.2
+minutes per pass, and several passes are added together before the decision. The program
+does all of it from one window:
+
+- **Setup**: pick the kind of run, set the frequency, gains, message, and timing; preview
+  the schedule; press Start.
+- **Run**: watch the tones arrive, the decisions form, the chunks progress, the key line,
+  the radio and the GPS clock.
+- **Report**: read the session report when the run ends, or re-decode an earlier one.
+
+The settings are remembered between runs, so the desktop icon opens the program ready
+for the last test. A run can be repeated, changed, and repeated again without restarting
+the program.
+
+# 2. Before you start: the hardware checklist
+
+<!-- widths: 1.8,4.9 -->
+| Item | What to check |
+|---|---|
+| B210 | On a USB 3 port of the PC (a direct rear port, not the powered extension cable). It appears in Device Manager under "USRPs". After a power event that leaves it unrecognized, unplug USB and the DC barrel for 15 s (a true cold start). |
+| GPS reference clock (Leo Bodnar) | OUT1 to the B210 **REF IN** (10 MHz). OUT2 to the B210 **PPS IN** (with output 2 disabled the OUT2 connector carries the 1 PPS; the program sets this). USB to the PC. GPS antenna with a clear sky view. Both LEDs steady after a few minutes = locked. |
+| Key line | B210 header J504, **pin 1 (GPIO_0)** and a **ground pin (9 or 10)**, 3.3 V logic, through the isolated driver to the sequencer. On the clone with the case connector: pin "1" and a "G". Never straight to the sequencer input. |
+| Transmit | B210 **TX/RX A** to the driver's input pad. The B210 gives at most +8 dBm; the driver decides the TX gain setting (Setup → TX gain). |
+| Receive | LNA output (through the bandpass filter if fitted) to B210 **RX2 A**. Nothing on RX2 for the loopback bench. |
+| Sequencer | LNA sequencer and LNA DC control in place; the amplifier's own interlocks armed; the 2 kW load only for the thermal test. |
+| PC clock | The PC needs internet NTP (the second number of the PPS-edge time set comes from it). Windows: Settings → Time → Sync now. |
+| Pointing | The dish tracks the target under System 1 (RA/Dec, J2000). The Run tab shows the target's azimuth and elevation from the ephemeris for a cross-check. |
+| Archive folder | A folder with room for the run: about 24 MB per 30-minute pass at the modem rate. |
+
+# 3. Starting the program
+
+Double-click the **DSES EVE Modem** desktop icon (created once with
+`install-shortcut.ps1`). The window opens on the Setup tab with the last settings. The
+status bar shows where the settings file is. If the program does not start, the log is
+in `%LOCALAPPDATA%\DSES\EVE_Modem\app.log`.
+
+![Setup tab](figures/app_setup.png)
+
+# 4. The Setup tab
+
+Every control has a tooltip: hover over it or its label. The essentials:
+
+## 4.1 Run mode
+
+<!-- widths: 1.6,5.1 -->
+| Mode | When to use it |
+|---|---|
+| Software simulation | No radio. Proves the decoder and the display at a chosen signal-to-noise. Run it first on any new PC. |
+| Bench loopback | One B210, nothing on the antenna ports. Transmits at low gain, receives its own internal leakage. Proves the radio, the reference, the archive, and the decoder before anything goes on the air. |
+| EME | Moon bounce. Ephemeris from JPL Horizons, Doppler pre-compensated, transmit 2.4 s then listen for the 2.5 s echo, repeat. The rehearsal before Venus. |
+| EVE | Venus bounce. 240 s transmit chunks against the 272 s round trip. A full message is 30.2 minutes per pass; plan five passes. |
+
+## 4.2 Waveform and message
+
+- **Variant** A is the ORI air interface (2.87 Hz bins, 473 frames per symbol). Use A
+  whenever another station must decode us. B is a DSES-only variant.
+- **Dial frequency**: 1299.5 MHz for Venus 2026 with the 23 cm package; 1296 on the
+  bench. The comb sits 25 to 48.5 kHz above the dial.
+- **Message**: K0PRT K0PRT, the club call. Up to 11 characters.
+- **Repeat count**: passes of the message. The receiver adds them; five for Venus.
+- **Symbol length**: **full length** (473 frames, 164.8 s per symbol) is the air
+  interface. The **test length** (6 frames, 2.1 s) makes a whole message pass in 23 s
+  for bench work. The program warns before sending a test-length signal on the air.
+
+## 4.3 Radio and reference
+
+- **TX gain** 0 dB on the bench; on the air, what the driver's input pad expects.
+- **RX gain**: set so the background of the tone strip is visible but not saturated
+  (30 dB on the bench, 40 to 50 dB behind the LNA).
+- **Clock source** external (the GPS clock on REF IN and PPS IN). The run refuses to
+  start unless the B210 reports lock.
+- **Time**: leave host-timed unticked when the PPS is connected. Tick it only if there
+  is no PPS; the epoch then comes from the PC clock, still inside the tolerance.
+- **GPS clock**: ticked, the program sets the Leo Bodnar clock to the station setting
+  and waits for lock before opening the radio.
+- **Archive folder**: where the run's files go.
+
+## 4.4 Mode settings
+
+The group under the radio settings changes with the mode. For EME and Venus the sky
+session group adds the start time (now plus a lead, or a UTC time), the ephemeris source
+(Horizons, astropy fallback), the station mode (monostatic, or transmit-only for a
+partner receiver), and the Doppler handling. The defaults are the design values; change
+them only for a reason you can write in the log.
+
+## 4.5 Preview, Start, Abort
+
+**Preview schedule** builds the schedule without touching the radio and lists every
+chunk with its times, frames, round trip, elevation, and Doppler, then the total
+duration. For a sky session this fetches the ephemeris, which takes a few seconds. Check
+the elevation and the duration before Start.
+
+**START** saves the settings, programs the GPS clock, opens the radio, builds the
+schedule, and switches to the Run tab. The first chunk starts after the lead time (15 s).
+
+**ABORT** releases the key line at once, stops the streams, closes the archive, and
+writes the log. Use it for any fault. The same button is on the Run tab.
+
+# 5. The Run tab: what to watch
+
+![Run tab](figures/app_run.png)
+
+<!-- widths: 1.6,5.1 -->
+| Panel | What a healthy run looks like |
+|---|---|
+| Phase (top right) | armed → TX chunk n of N → listening for chunk n → … → finished. |
+| Clocks | UTC (PC) and device time agree to milliseconds when the time was set on a PPS. |
+| Tone strip | One bright dot per row (one tone per frame) that steps to a new column at each symbol boundary; a steady column during the pilot. The background is receiver noise. A blank strip means no signal, wrong RX gain, or the receive window is closed (between chunks). At Venus strength single frames show nothing: that is expected. |
+| Current symbol | The sum over the frames of the symbol in progress. The gold dashed line is the tone we sent; the red line is the leader. On the bench they coincide from the first frame; on Venus the peak climbs out of the noise as frames add up. |
+| Running decisions | One row per symbol: expected, decided, margin in dB, frames summed. Green rows agree with what we sent. The line under the table shows the message the live accumulators would decode now. |
+| Schedule | Chunk in progress, chunks complete, time remaining, frames wanted vs received. |
+| Key lamp | Red while the key line is asserted. It rises 200 ms before the RF and drops 100 ms after. |
+| Radio and ephemeris | LOCKED must be shown on the air. LO offset ok in both directions. GPS clock: sat LOCK, PLL LOCK. Target azimuth, elevation, round trip, Doppler, and rate. |
+| Log | Every step the program took, keying events, radio messages, decode results. |
+
+The live decisions are a view for the operator; the decision of record is the offline
+decode of the archived windows that runs when the session ends and appears in the report.
+
+# 6. The Report tab
+
+![Report tab](figures/app_report.png)
+
+When a run ends the program decodes the archive, writes
+`<session>_report.pdf` beside the session log, and shows it here: the verdict, the
+decisions with margins per pass, the chunk timeline with key events, the per-window
+synchronization (pilot offset, tracker residual, sample gaps), and the key-event list.
+
+- **Open in PDF viewer** for printing or sending.
+- **Open archive folder** to reach the raw files.
+- **Re-decode this session** runs the offline decode again on the archived windows and
+  rebuilds the report (after a software fix, or to try without the pilot).
+- Earlier reports in the same folder are listed; click one to view it.
+
+# 7. The test sequence at the site
+
+1. **Software simulation** at C/N0 20 dB-Hz, test-length symbols: proves the program on
+   the site PC. One minute.
+2. **Bench loopback**, test length, TX gain 0, GPS clock ticked, clock source external:
+   proves the B210, the reference lock, the PPS time set, the archive, the decode. About
+   two minutes. Both passes should decode at 20 dB or more of margin.
+3. **Bench loopback, full length, one pass** (34 minutes): proves the long streams with
+   no underruns and the amplifier-limit chunking at real length. Run it once per PC.
+4. **EME**, test length first, then full length, with the dish on the Moon: the echo path,
+   the Doppler pre-compensation, the sequencer, the LNA, and the gains. Expect the echo
+   in the receive windows 2.5 s after each chunk.
+5. **Venus**: full length, five passes, start time from the session plan.
+
+After every run, read the report before deciding the next step. Keep the archive folder;
+the raw windows can be decoded again later.
+
+# 8. When something is wrong
+
+<!-- widths: 2.3,4.4 -->
+| Symptom | What it means and what to do |
+|---|---|
+| "GPS clock not locked; refusing to start" | The Leo Bodnar clock has no satellite or PLL lock. Check the antenna's sky view and the LEDs; wait a few minutes after power-up; after reprogramming the PLL drops for a few seconds and relocks within 20 s. |
+| "reference not locked (external)" | No 10 MHz at REF IN, or the clock is not locked. Check the OUT1 cable and the clock's LEDs. |
+| "USRP time did not take on the PPS edge" | No PPS at PPS IN. Check OUT2 to PPS IN (output 2 must be disabled: the program does that). As a fallback tick host-timed. |
+| "PPS verify False" in the log | Same as above: no second PPS edge was seen. |
+| A storm of 'L' or LATE_COMMAND in the log at the start | The radio was not armed in time. Increase the lead time (15 s or more) and close other programs. |
+| 'O' or overflows in the log | The PC dropped receive samples. One short overflow at start-up is known and padded; repeated ones mean the PC is too busy: close other programs, use a direct USB 3 port. The archive records every gap. |
+| Blank tone strip during a receive window | No signal or wrong RX gain. On the bench check TX gain 0 and nothing on the antenna ports; on the air check the LNA and the sequencer. |
+| Decisions wrong on the bench | Reference unlocked (frequency off), or the LO offset fell back (the radio line says so). Do not go on the air until the bench decodes. |
+| "chunk would hold no frames" | The chunk settings leave no room between the round trip and the guard. Restore the mode's defaults. |
+| Horizons unreachable | The ephemeris source falls back to astropy with the local DE440s. The Doppler differs by up to 10 Hz at 13 cm; acceptable, but note it in the log. |
+| The program will not start from the icon | Read `%LOCALAPPDATA%\DSES\EVE_Modem\app.log`. The project environment must exist in `.conda` next to the program. |
+
+# 9. Files a run produces
+
+In the archive folder, all named by the session id (mode and UTC start):
+
+- `<session>.json` — the schedule (the contract with any partner station).
+- `<session>_<target>_haswell.csv` — the ephemeris table used (sky sessions).
+- `<session>_NN.eve.iq` + `.json` — one receive window per chunk, complex float samples
+  at the modem rate with a sidecar (start time, first frame, gaps).
+- `<session>_session.json` — the session log (times, keying, radio, live decode).
+- `<session>_report.pdf` — the report.
+
+# 10. Command-line equivalents
+
+The window drives the same code as the tools in `tools/`: `eve_session.py plan | run |
+sim`, `eve_bench.py`, `eve_decode.py`, `eve_txcw.py` (one comb tone into the lab counter),
+and `python -m eve.gpsdo status | config | preflight` for the GPS clock. Use them for
+scripted tests and for the field log; the design document section 5.1 lists their options.

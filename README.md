@@ -20,6 +20,8 @@ loopback bench, EME, and Venus sessions, with settings remembered between runs
 PDF shown when a run ends. Create the desktop icon once with
 `powershell -File install-shortcut.ps1` (it runs `launcher.ps1`, which starts the app
 from this repo's `.conda` env with `Library\bin` on PATH). Every control has a tooltip.
+Help → Operator's guide (F1) shows `docs/DSES_EVE_Modem_Operators_Guide.md`; the same
+file builds `docs/DSES_EVE_Modem_Operators_Guide.pdf` (build_docs.ps1 builds both documents).
 The command-line tools in `tools/` do the same work for scripts.
 
 ## Layout

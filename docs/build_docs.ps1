@@ -22,3 +22,13 @@ $env:PATH = (Join-Path $eve 'Library\bin') + ';' + $env:PATH
     --subtitle 'Design Description and Interface Control Document' `
     --version 'Rev C - DRAFT' `
     --header-logo $logo --force
+
+# Operator's guide: the same Markdown feeds the application's Help menu.
+& $py $gen (Join-Path $here 'DSES_EVE_Modem_Operators_Guide.md') `
+    --pdf   (Join-Path $here 'DSES_EVE_Modem_Operators_Guide.pdf') `
+    --docx  (Join-Path $here 'DSES_EVE_Modem_Operators_Guide.docx') `
+    --title 'Earth-Venus-Earth Modem' `
+    --subtitle "Operator's Guide" `
+    --version 'Rev A - DRAFT' `
+    --header-logo $logo --force
+

@@ -563,6 +563,54 @@ class ReportView(QtWidgets.QWidget):
 
 
 # ------------------------------------------------------------------------------------------
+# help: the operator's guide (docs/DSES_EVE_Modem_Operators_Guide.md) in the window
+# ------------------------------------------------------------------------------------------
+DOCS = Path(__file__).resolve().parents[1] / "docs"
+GUIDE_MD = DOCS / "DSES_EVE_Modem_Operators_Guide.md"
+GUIDE_PDF = DOCS / "DSES_EVE_Modem_Operators_Guide.pdf"
+DESIGN_PDF = DOCS / "DSES_EVE_Modem_Design_and_ICD.pdf"
+
+
+class HelpDialog(QtWidgets.QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("DSES EVE modem — Operator's guide")
+        self.resize(900, 760)
+        lay = QtWidgets.QVBoxLayout(self)
+        row = QtWidgets.QHBoxLayout()
+        self.search = QtWidgets.QLineEdit()
+        self.search.setPlaceholderText("find in the guide (Enter for next)")
+        self.search.returnPressed.connect(self._find)
+        row.addWidget(self.search, 1)
+        b = QtWidgets.QPushButton("Open the guide PDF")
+        b.setEnabled(GUIDE_PDF.exists())
+        b.clicked.connect(lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(GUIDE_PDF))))
+        row.addWidget(b)
+        b = QtWidgets.QPushButton("Design document PDF")
+        b.setEnabled(DESIGN_PDF.exists())
+        b.clicked.connect(lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(DESIGN_PDF))))
+        row.addWidget(b)
+        lay.addLayout(row)
+        self.view = QtWidgets.QTextBrowser()
+        self.view.setOpenExternalLinks(True)
+        self.view.setSearchPaths([str(DOCS)])
+        try:
+            md = GUIDE_MD.read_text(encoding="utf-8")
+            # the document header table and the width hints are for the PDF build
+            md = "\n".join(ln for ln in md.splitlines() if not ln.startswith("<!-- widths"))
+            self.view.setMarkdown(md)
+        except Exception as e:      # noqa: BLE001
+            self.view.setPlainText(f"The guide is not available: {e}\n(expected at {GUIDE_MD})")
+        lay.addWidget(self.view, 1)
+
+    def _find(self):
+        q = self.search.text()
+        if q and not self.view.find(q):
+            self.view.moveCursor(QtGui.QTextCursor.Start)
+            self.view.find(q)
+
+
+# ------------------------------------------------------------------------------------------
 # main window
 # ------------------------------------------------------------------------------------------
 class EveApp(QtWidgets.QMainWindow):
@@ -592,6 +640,22 @@ class EveApp(QtWidgets.QMainWindow):
         self.status = QtWidgets.QLabel("idle")
         self.statusBar().addWidget(self.status, 1)
         self.statusBar().addPermanentWidget(QtWidgets.QLabel(f"settings: {self.settings.path}"))
+        helpm = self.menuBar().addMenu("&Help")
+        a = helpm.addAction("Operator's guide")
+        a.setShortcut("F1")
+        a.triggered.connect(self._help)
+        a = helpm.addAction("Open the guide PDF")
+        a.triggered.connect(lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(GUIDE_PDF))))
+        a = helpm.addAction("Design description and ICD (PDF)")
+        a.triggered.connect(lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(DESIGN_PDF))))
+        helpm.addSeparator()
+        a = helpm.addAction("About")
+        a.triggered.connect(lambda: QtWidgets.QMessageBox.about(
+            self, "DSES EVE modem",
+            f"DSES Earth-Venus-Earth modem {__version__}\n\nORI 'Spiral #2' waveform by Pete Wyckoff, KA3WCA "
+            f"(Open Research Institute, GPL-3.0).\nDSES implementation: Rick Hambly, K0GD.\n\n"
+            f"Settings: {self.settings.path}"))
+        self._help_dlg = None
         self._load()
         self._mode_changed()
         geo = self.settings.q.value("geometry")
@@ -1020,6 +1084,12 @@ class EveApp(QtWidgets.QMainWindow):
     def _redecode(self, session_json: Path) -> None:
         if not self.ctl.redecode(session_json):
             self.status.setText("busy")
+
+    def _help(self) -> None:
+        if self._help_dlg is None:
+            self._help_dlg = HelpDialog(self)
+        self._help_dlg.show()
+        self._help_dlg.raise_()
 
     def closeEvent(self, ev: QtGui.QCloseEvent) -> None:
         if self.ctl.busy:

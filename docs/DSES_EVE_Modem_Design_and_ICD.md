@@ -16,7 +16,9 @@ interface the implementation touches: the signal on the air, the station hardwar
 timing and frequency references, the files exchanged with other stations, and the boundary
 with the DSES Radio Astronomy Workbench. Sections 1 through 5 are the design description.
 Sections 6 through 9 are the interface control document (ICD). Section 10 is the decision
-and open-issue register. Anything in this document that another team member depends on is
+and open-issue register. The operator's instructions are a separate, shorter document,
+`DSES_EVE_Modem_Operators_Guide` (also the application's Help), so that the person at the
+keyboard is not handed forty pages of design. Anything in this document that another team member depends on is
 in the ICD sections, so that a change there is a change everyone sees.
 
 The ORI reference material is the EVE repository on GitHub (OpenResearchInstitute/EVE):

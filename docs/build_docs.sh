@@ -30,3 +30,7 @@ LOGO="$WB/reports/assets/DSES_Logo_Compact_Teal.png"
     --subtitle 'Design Description and Interface Control Document' \
     --version 'Rev C - DRAFT' \
     --header-logo "$LOGO" --force
+
+# Operator's guide (same Markdown as the application's Help menu)
+"$PY" "$GEN" "$here/DSES_EVE_Modem_Operators_Guide.md"     --pdf "$here/DSES_EVE_Modem_Operators_Guide.pdf"     --docx "$here/DSES_EVE_Modem_Operators_Guide.docx"     --title 'Earth-Venus-Earth Modem' --subtitle "Operator's Guide"     --version 'Rev A - DRAFT' --header-logo "$LOGO" --force
+
