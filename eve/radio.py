@@ -177,6 +177,13 @@ class EveRadio:
         return bool(R.gpio_read(self.rx.block, self.cfg.key_bank) & self.cfg.key_mask)
 
     # ---- status ------------------------------------------------------------------------------
+    def status_text(self) -> str:
+        """One-line summary for session reports (Session.report.radio); '' if not open."""
+        try:
+            return self.status().summary()
+        except Exception as e:
+            return f"status unavailable: {e}"
+
     def status(self) -> RadioStatus:
         b = self.rx.block
         return RadioStatus(
