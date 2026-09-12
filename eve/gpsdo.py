@@ -16,8 +16,11 @@ GPS-derived reference fin:
     fout1 = fosc / (N1_HS * NC1_LS),  fout2 = fosc / (N1_HS * NC2_LS)   (450 Hz .. 808 MHz)
 
 with N3 in 1..2^19, N2_HS and N1_HS in 4..11, N2_LS even in 2..2^20, NC*_LS 1 or even in
-2..2^20. The chain cannot reach 1 Hz, so a 1 PPS output is not something this protocol
-can ask for. Settings persist in the clock's flash.
+2..2^20. The chain cannot reach 1 Hz; instead, with OUTPUT 2 DISABLED the OUT2 pin
+carries the GPS receiver's 1 PPS (firmware 1.7, verified on the scope 2026-09-12: 1.00003 Hz,
+200 ms high, 3.3 V CMOS) - which is the product page's "output 2 showing 1PPS timing".
+So the modem's standard setup, OUT1 = 10 MHz at level 1 and OUT2 off, feeds the B210's
+REF IN and PPS IN from one box. Settings persist in the clock's flash.
 
 Bench facts (2026-09-12): fin 4,687,500 Hz; factory plan for 10 MHz on both outputs is
 N3 5, N2_HS 11, N2_LS 512, N1_HS 11, NC 48 (fosc 5.28 GHz); drive level 1 = 16 mA gives
@@ -321,7 +324,8 @@ def preflight(serial: Optional[str] = None, f1: float = 10e6, level: int = 1, ap
         changed = False
         want = Fraction(f1).limit_denominator(1000)
         # The modem's standard setup (Rick, 2026-09-12): OUT1 = 10 MHz at level 1 (16 mA,
-        # about +11 dBm into the B210's REF IN, whose maximum is +15 dBm), OUT2 OFF. The
+        # about +11 dBm into the B210's REF IN, whose maximum is +15 dBm), OUT2 OFF, which
+        # turns the OUT2 pin into the 1 PPS for the B210's PPS IN (firmware 1.7). The
         # oscillator plan is left alone whenever OUT1 already reads 10 MHz exactly (the
         # vendor program picks its own plan, e.g. fin 97.6 kHz / 6.1 GHz); only a wrong
         # OUT1 frequency triggers a new plan. This unit cannot make 1 PPS.
