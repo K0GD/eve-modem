@@ -138,12 +138,24 @@ class EveRadio:
         return self.status()
 
     def close(self) -> None:
+        """Release both USRP streamers. Every reference to the usrp_source / usrp_sink
+        must be gone before the same B210 is opened again in this process (see
+        Session.release); gc.collect() makes that prompt."""
+        import gc
         try:
             self.key(False)
         except Exception:
             pass
+        rx, tx = self.rx, self.tx
         self.tx = None
         self.rx = None
+        if rx is not None:
+            try:
+                rx.block = None
+            except Exception:
+                pass
+        del rx, tx
+        gc.collect()
 
     # ---- time ------------------------------------------------------------------------------
     def device_time(self) -> float:

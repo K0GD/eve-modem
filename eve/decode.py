@@ -55,6 +55,11 @@ def decode_archive(archive_dir, schedule: Schedule, use_pilot: bool = True, trac
         if frac > 0.5:
             x = x[int(round((1.0 - frac) * p.n_fft)):]
             k0 += 1
+        # a window is bounded by device time, so its last frame can come up a few samples
+        # short (2026-09-12: 49,151 of 49,152); pad it rather than drop it
+        rem = x.size % p.n_fft
+        if rem and rem >= 0.9 * p.n_fft:
+            x = np.concatenate([x, np.zeros(p.n_fft - rem, dtype=np.complex64)])
         if epoch_search_frames > 0 and not (use_pilot and fm.pilot):
             if known_shift is None:
                 known_shift = _epoch_shift(x, k0, schedule, epoch_search_frames)

@@ -26,7 +26,8 @@ does all of it from one window:
   the schedule; press Start.
 - **Run**: watch the tones arrive, the decisions form, the chunks progress, the key line,
   the radio and the GPS clock.
-- **Report**: read the session report when the run ends, or re-decode an earlier one.
+- **Report**: read the session report when the run ends, re-decode an earlier one, or tick
+  Compare to put two reports side by side.
 
 The settings are remembered between runs, so the desktop icon opens the program ready
 for the last test. A run can be repeated, changed, and repeated again without restarting
@@ -150,7 +151,10 @@ synchronization (pilot offset, tracker residual, sample gaps), and the key-event
 - **Open archive folder** to reach the raw files.
 - **Re-decode this session** runs the offline decode again on the archived windows and
   rebuilds the report (after a software fix, or to try without the pilot).
-- Earlier reports in the same folder are listed; click one to view it.
+- Earlier reports in the same folder are listed; click one to view it. The teal bar over
+  the pages names the report shown.
+- **Compare** opens a second pane with its own chooser, so two runs sit side by side
+  (Zoom 50 % fits both on a laptop screen).
 
 # 7. The test sequence at the site
 
@@ -201,6 +205,7 @@ about −20 dBm at RX2, so 30 to 40 dB of attenuation between two radios on the 
 | 'O' or overflows in the log | The PC dropped receive samples. One short overflow at start-up is known and padded; repeated ones mean the PC is too busy: close other programs, use a direct USB 3 port. The archive records every gap. |
 | Blank tone strip during a receive window | No signal or wrong RX gain. On the bench check TX gain 0 and nothing on the antenna ports; on the air check the LNA and the sequencer. |
 | Decisions wrong on the bench | Reference unlocked (frequency off), or the LO offset fell back (the radio line says so). Do not go on the air until the bench decodes. |
+| "a chunk of N frames cannot hold the pilot frames plus data" | The chunk is too short for the pilot. Variant B frames are 0.667 s, so the 2.4 s bench chunk holds three frames and two are pilot: use a chunk of 4 s or more for Variant B (the message says the minimum). |
 | "chunk would hold no frames" | The chunk settings leave no room between the round trip and the guard. Restore the mode's defaults. |
 | Horizons unreachable | The ephemeris source falls back to astropy with the local DE440s. The Doppler differs by up to 10 Hz at 13 cm; acceptable, but note it in the log. |
 | The program closes by itself | A native library crashed. Two files under `%LOCALAPPDATA%\DSES\EVE_Modem` tell the story: `app.log` (everything the program printed) and `fault.log` (the traceback of a hard crash). Send both. If the B210 was left streaming by a program that was killed, power-cycle it (USB and DC off for 15 s) before the next try. |

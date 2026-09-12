@@ -209,6 +209,7 @@ class RunController(QtCore.QObject):
     preview_ready = QtCore.Signal(str)
     finished = QtCore.Signal(dict)                 # {"ok", "pdf", "session_id", "summary", "error"}
     state = QtCore.Signal(str)                     # idle | preparing | running | decoding | done
+    session_done = QtCore.Signal()                 # the GUI must let go of the session (panel.unbind)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -216,6 +217,7 @@ class RunController(QtCore.QObject):
         self._thread: Optional[threading.Thread] = None
         self._bound = threading.Event()
         self.busy = False
+        self._released = threading.Event()
 
     # ---- public --------------------------------------------------------------------------
     def start(self, cfg: Dict, preview_only: bool = False) -> bool:
@@ -223,6 +225,7 @@ class RunController(QtCore.QObject):
             return False
         self.busy = True
         self._bound.clear()
+        self._released.clear()
         self._thread = threading.Thread(target=self._work, args=(dict(cfg), preview_only), name="eve-app-run", daemon=True)
         self._thread.start()
         return True
@@ -237,6 +240,9 @@ class RunController(QtCore.QObject):
 
     def panel_bound(self) -> None:
         self._bound.set()
+
+    def panel_released(self) -> None:
+        self._released.set()
 
     def abort(self, reason: str = "operator abort") -> None:
         if self.session is not None:
@@ -368,6 +374,15 @@ class RunController(QtCore.QObject):
                                          doppler_table=table_name)
                 opts_kw = dict(pa_in_chain=bool(cfg["sky_pa"]), tx_precompensate=bool(cfg["sky_precomp"]),
                                rx_doppler_removal=bool(cfg["sky_rx_doppler"]))
+            # a chunk must hold the pilot frames plus at least two data frames, or the
+            # pilot eats the chunk (Variant B with the 2.4 s bench chunk: 3 frames, 2 pilot)
+            if sched.pilot_enabled and sched.chunks:
+                n_min = min(c.n_frames for c in sched.chunks[:-1] or sched.chunks)
+                need = p.pilot_frames + 2
+                if n_min < need:
+                    raise RuntimeError(f"a chunk of {n_min} frames cannot hold {p.pilot_frames} pilot frames plus data: "
+                                       f"use a chunk of at least {need / p.r_bw:.1f} s ({need} frames of {p.t_frame:.3f} s) "
+                                       f"or fewer pilot frames")
             desc = S.describe(sched, model)
             dur = sched.t_end - sched.t_start
             desc += f"\nduration {dur / 60:.1f} min ({int(dur // 3600)}h {int(dur % 3600 // 60):02d}m); symbol {p.n_frames} frames = {p.t_sym:.1f} s; message {p.t_sym * p.n_sym / 60:.1f} min per pass"
@@ -390,6 +405,13 @@ class RunController(QtCore.QObject):
             try:
                 rep = sess.run()
             finally:
+                # order matters: blocks first (Session.release), then the panel's grip on
+                # the session, then the radio; a usrp_source that outlives close() makes
+                # the next open crash the process
+                self.session_done.emit()
+                self._released.wait(3.0)
+                sess.release()
+                self.session = None
                 if radio is not None:
                     try:
                         radio.close()
@@ -461,23 +483,74 @@ class RunController(QtCore.QObject):
 # ------------------------------------------------------------------------------------------
 # report viewer
 # ------------------------------------------------------------------------------------------
+class ReportPane(QtWidgets.QWidget):
+    """One rendered report: a header naming it, the pages in a scroll area."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.current: Optional[Path] = None
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.header = QtWidgets.QLabel("no report selected")
+        self.header.setStyleSheet(f"font-weight: bold; color: white; background: {TEAL}; padding: 4px 8px;")
+        lay.addWidget(self.header)
+        self.scroll = QtWidgets.QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.pages = QtWidgets.QWidget()
+        self.pages_lay = QtWidgets.QVBoxLayout(self.pages)
+        self.pages_lay.setAlignment(QtCore.Qt.AlignHCenter | QtCore.Qt.AlignTop)
+        self.scroll.setWidget(self.pages)
+        lay.addWidget(self.scroll, 1)
+
+    def clear(self) -> None:
+        while self.pages_lay.count():
+            w = self.pages_lay.takeAt(0).widget()
+            if w is not None:
+                w.setParent(None)        # stop painting now; deleteLater alone leaves ghosts until the loop turns
+                w.deleteLater()
+
+    def render(self, pdf: Optional[Path], zoom: int) -> None:
+        self.clear()
+        self.current = pdf
+        if pdf is None or not pdf.exists():
+            self.header.setText("no report selected")
+            self.pages_lay.addWidget(QtWidgets.QLabel("no report selected"))
+            return
+        self.header.setText(f"{pdf.name[:-len('_report.pdf')]}    written {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(pdf.stat().st_mtime))}")
+        try:
+            import pymupdf
+            doc = pymupdf.open(str(pdf))
+            for page in doc:
+                pix = page.get_pixmap(dpi=int(96 * zoom / 100), alpha=False)
+                img = QtGui.QImage(pix.samples, pix.width, pix.height, pix.stride, QtGui.QImage.Format_RGB888).copy()
+                lbl = QtWidgets.QLabel()
+                lbl.setPixmap(QtGui.QPixmap.fromImage(img))
+                lbl.setFrameShape(QtWidgets.QFrame.Box)
+                self.pages_lay.addWidget(lbl)
+            doc.close()
+        except Exception as e:      # noqa: BLE001
+            self.pages_lay.addWidget(QtWidgets.QLabel(f"cannot render {pdf.name}: {e}\nUse 'Open in PDF viewer'."))
+        self.scroll.verticalScrollBar().setValue(0)
+
+
 class ReportView(QtWidgets.QWidget):
+    """The report list, one rendered report, and an optional second pane for comparing."""
     redecode_requested = QtCore.Signal(object)     # Path of the schedule JSON
 
     def __init__(self, settings: Settings, parent=None):
         super().__init__(parent)
         self.settings = settings
         self.archive = Path(settings.get("archive"))
-        self.current: Optional[Path] = None
         lay = QtWidgets.QHBoxLayout(self)
         left_w = QtWidgets.QWidget()
         left = QtWidgets.QVBoxLayout(left_w)
         left.setContentsMargins(0, 0, 0, 0)
-        left.addWidget(QtWidgets.QLabel("Session reports in the archive folder (newest first)"))
+        left.addWidget(QtWidgets.QLabel("Session reports in the archive folder (newest first). Click one to show it."))
         self.list = QtWidgets.QListWidget()
         self.list.setMinimumWidth(200)
         self.list.currentItemChanged.connect(self._pick)
-        self.list.setToolTip("One entry per session report; click to view it. The session id is the mode and the UTC start.")
+        self.list.setToolTip("One entry per session report; click to show it in the main pane. With Compare ticked, "
+                             "the second pane keeps its own choice so two runs sit side by side.")
         left.addWidget(self.list, 1)
         row = QtWidgets.QHBoxLayout()
         self.btn_refresh = QtWidgets.QPushButton("Refresh")
@@ -502,97 +575,133 @@ class ReportView(QtWidgets.QWidget):
         zrow = QtWidgets.QHBoxLayout()
         zrow.addWidget(QtWidgets.QLabel("Zoom"))
         self.zoom = QtWidgets.QComboBox()
-        for z in (75, 100, 125, 150, 200):
+        for z in (50, 75, 100, 125, 150, 200):
             self.zoom.addItem(f"{z} %", z)
         self.zoom.setCurrentIndex(max(0, self.zoom.findData(int(settings.get("report_zoom")))))
-        self.zoom.currentIndexChanged.connect(lambda _i: self._render())
-        self.zoom.setToolTip("Page rendering size.")
+        self.zoom.currentIndexChanged.connect(lambda _i: self._rerender())
+        self.zoom.setToolTip("Page rendering size (50 % fits two reports side by side on a laptop screen).")
         zrow.addWidget(self.zoom)
+        self.compare = QtWidgets.QCheckBox("Compare")
+        self.compare.setToolTip("Show a second pane on the right with its own report chooser, to compare two runs.")
+        self.compare.toggled.connect(self._toggle_compare)
+        zrow.addWidget(self.compare)
         zrow.addStretch(1)
         left.addLayout(zrow)
-        self.scroll = QtWidgets.QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.pages = QtWidgets.QWidget()
-        self.pages_lay = QtWidgets.QVBoxLayout(self.pages)
-        self.pages_lay.setAlignment(QtCore.Qt.AlignHCenter | QtCore.Qt.AlignTop)
-        self.scroll.setWidget(self.pages)
+
+        self.pane = ReportPane()
+        self.pane2 = ReportPane()
+        self.pane2_pick = QtWidgets.QComboBox()
+        self.pane2_pick.setToolTip("The report shown in the compare pane.")
+        self.pane2_pick.currentIndexChanged.connect(self._pane2_changed)
+        pane2_w = QtWidgets.QWidget()
+        p2 = QtWidgets.QVBoxLayout(pane2_w)
+        p2.setContentsMargins(0, 0, 0, 0)
+        p2.addWidget(self.pane2_pick)
+        p2.addWidget(self.pane2, 1)
+        self.pane2_w = pane2_w
+        self.pane2_w.hide()
+        self.panes = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        self.panes.addWidget(self.pane)
+        self.panes.addWidget(self.pane2_w)
         self.split = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         self.split.addWidget(left_w)
-        self.split.addWidget(self.scroll)
+        self.split.addWidget(self.panes)
         self.split.setStretchFactor(0, 1)
         self.split.setStretchFactor(1, 4)
         self.split.setSizes([330, 960])
         lay.addWidget(self.split)
         self.refresh()
 
+    # ---- compatibility with the earlier single-pane API
+    @property
+    def current(self) -> Optional[Path]:
+        return self.pane.current
+
+    @property
+    def pages_lay(self):
+        return self.pane.pages_lay
+
     def set_archive(self, folder: str) -> None:
         self.archive = Path(folder)
         self.refresh()
 
+    def _files(self):
+        return sorted(self.archive.glob("*_report.pdf"), key=lambda f: f.stat().st_mtime, reverse=True) if self.archive.exists() else []
+
     def refresh(self) -> None:
+        files = self._files()
+        keep = self.pane.current
         self.list.blockSignals(True)
         self.list.clear()
-        files = sorted(self.archive.glob("*_report.pdf"), key=lambda f: f.stat().st_mtime, reverse=True) if self.archive.exists() else []
         for f in files:
             it = QtWidgets.QListWidgetItem(f"{f.name[:-len('_report.pdf')]}   {time.strftime('%Y-%m-%d %H:%M', time.localtime(f.stat().st_mtime))}")
             it.setData(QtCore.Qt.UserRole, str(f))
             self.list.addItem(it)
         self.list.blockSignals(False)
-        if files and (self.current is None or not self.current.exists()):
+        keep2 = self.pane2.current
+        self.pane2_pick.blockSignals(True)
+        self.pane2_pick.clear()
+        for f in files:
+            self.pane2_pick.addItem(f.name[:-len("_report.pdf")], str(f))
+        if keep2 is not None:
+            i = self.pane2_pick.findData(str(keep2))
+            if i >= 0:
+                self.pane2_pick.setCurrentIndex(i)
+        self.pane2_pick.blockSignals(False)
+        if files and (keep is None or not keep.exists()):
             self.list.setCurrentRow(0)
-        elif self.current is not None:
-            self.select(self.current)
+        elif keep is not None:
+            self.select(keep)
 
     def select(self, pdf: Path) -> None:
         for i in range(self.list.count()):
             if self.list.item(i).data(QtCore.Qt.UserRole) == str(pdf):
-                self.list.setCurrentRow(i)
+                if self.list.currentRow() == i:
+                    self.pane.render(pdf, int(self.zoom.currentData()))
+                else:
+                    self.list.setCurrentRow(i)
                 return
-        self.current = pdf
-        self._render()
+        self.pane.render(pdf, int(self.zoom.currentData()))
 
     def _pick(self, cur, _prev) -> None:
         if cur is None:
             return
-        self.current = Path(cur.data(QtCore.Qt.UserRole))
-        self._render()
+        self.pane.render(Path(cur.data(QtCore.Qt.UserRole)), int(self.zoom.currentData()))
 
-    def _clear_pages(self) -> None:
-        while self.pages_lay.count():
-            w = self.pages_lay.takeAt(0).widget()
-            if w is not None:
-                w.deleteLater()
+    def _pane2_changed(self, i: int) -> None:
+        if i >= 0 and self.compare.isChecked():
+            self.pane2.render(Path(self.pane2_pick.itemData(i)), int(self.zoom.currentData()))
 
-    def _render(self) -> None:
-        self._clear_pages()
-        if self.current is None or not self.current.exists():
-            self.pages_lay.addWidget(QtWidgets.QLabel("no report selected"))
-            return
+    def _toggle_compare(self, on: bool) -> None:
+        self.pane2_w.setVisible(on)
+        if on:
+            if self.pane2_pick.count() and self.pane2.current is None:
+                # default: the run before the one in the main pane
+                i = 0
+                for j in range(self.pane2_pick.count()):
+                    if self.pane.current is not None and self.pane2_pick.itemData(j) == str(self.pane.current):
+                        i = min(j + 1, self.pane2_pick.count() - 1)
+                        break
+                self.pane2_pick.setCurrentIndex(i)
+            self._pane2_changed(self.pane2_pick.currentIndex())
+            self.panes.setSizes([1, 1])
+
+    def _rerender(self) -> None:
         z = int(self.zoom.currentData())
         self.settings.set("report_zoom", z)
-        try:
-            import pymupdf
-            doc = pymupdf.open(str(self.current))
-            for page in doc:
-                pix = page.get_pixmap(dpi=int(96 * z / 100), alpha=False)
-                img = QtGui.QImage(pix.samples, pix.width, pix.height, pix.stride, QtGui.QImage.Format_RGB888).copy()
-                lbl = QtWidgets.QLabel()
-                lbl.setPixmap(QtGui.QPixmap.fromImage(img))
-                lbl.setFrameShape(QtWidgets.QFrame.Box)
-                self.pages_lay.addWidget(lbl)
-            doc.close()
-        except Exception as e:      # noqa: BLE001
-            self.pages_lay.addWidget(QtWidgets.QLabel(f"cannot render {self.current.name}: {e}\nUse 'Open in PDF viewer'."))
+        self.pane.render(self.pane.current, z)
+        if self.compare.isChecked():
+            self.pane2.render(self.pane2.current, z)
 
     def _open_external(self) -> None:
-        if self.current is not None and self.current.exists():
-            QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(self.current.resolve())))
+        if self.pane.current is not None and self.pane.current.exists():
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(self.pane.current.resolve())))
 
     def _redecode(self) -> None:
-        if self.current is None:
+        if self.pane.current is None:
             return
-        sid = self.current.name[:-len("_report.pdf")]
-        sj = self.current.parent / f"{sid}.json"
+        sid = self.pane.current.name[:-len("_report.pdf")]
+        sj = self.pane.current.parent / f"{sid}.json"
         if sj.exists():
             self.redecode_requested.emit(sj)
 
@@ -655,6 +764,7 @@ class EveApp(QtWidgets.QMainWindow):
         self.ctl = RunController(self)
         self.ctl.log.connect(self._log)
         self.ctl.session_ready.connect(self._session_ready)
+        self.ctl.session_done.connect(self._session_done)
         self.ctl.preview_ready.connect(self._preview_ready)
         self.ctl.finished.connect(self._finished)
         self.ctl.state.connect(self._state)
@@ -1145,6 +1255,10 @@ class EveApp(QtWidgets.QMainWindow):
         self.panel.bind(sess)
         self.ctl.panel_bound()
         self.preview.setPlainText(S.describe(sess.sched, sess.model))
+
+    def _session_done(self) -> None:
+        self.panel.unbind()          # keeps what is drawn; drops the references
+        self.ctl.panel_released()
 
     def _state(self, st: str) -> None:
         self.status.setText(st)

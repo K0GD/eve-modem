@@ -360,6 +360,7 @@ class EveRxSink(gr.sync_block):
     def _feed_frames(self, w, t: float, arr: np.ndarray):
         nfft = self.p.n_fft
         if self._frame_win != w[0]:
+            self._flush_partial_frame()
             self._frame_buf = np.zeros(0, dtype=np.complex64)
             self._frame_k = w[3] + int(np.floor((t - w[1]) * self.p.r_bw + 1e-9))
             self._frame_win = w[0]
@@ -373,6 +374,20 @@ class EveRxSink(gr.sync_block):
             self._frame_k += 1
         self._frame_buf = buf[nf * nfft:]
 
+    def _flush_partial_frame(self):
+        """A window ends on a device-time boundary and can leave its last frame a few
+        samples short; give the live view that frame (zero-padded) rather than drop it."""
+        nfft = self.p.n_fft
+        buf = getattr(self, "_frame_buf", None)
+        if buf is not None and buf.size >= 0.9 * nfft and self.on_frame is not None:
+            frame = np.concatenate([buf, np.zeros(nfft - buf.size, dtype=np.complex64)])
+            try:
+                self.on_frame(self._frame_k, frame)
+            except Exception:
+                pass
+            self._frame_k += 1
+        self._frame_buf = np.zeros(0, dtype=np.complex64)
+
     # ---- shutdown -------------------------------------------------------------------------
     def stop(self):
         self.close()
@@ -384,6 +399,10 @@ class EveRxSink(gr.sync_block):
         self._closed = True
         self._stopping.set()
         self._worker.join(timeout=60.0)
+        try:
+            self._flush_partial_frame()
+        except Exception:
+            pass
         for ci, f in self._files.items():
             f["fh"].close()
             side = {

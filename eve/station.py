@@ -371,6 +371,31 @@ class Session:
         self.write_log()
         return self.report
 
+    def release(self) -> None:
+        """Drop the flowgraph and every GNU Radio block so the radio's streamers die now,
+        not at some later garbage collection. A second uhd.usrp_source for the same
+        B210 while the first one is still alive crashed the process (access violation
+        in the constructor, 2026-09-12); the application calls this before closing the
+        radio and opening it again for the next run."""
+        import gc
+        tb = self.tb
+        if tb is not None:
+            try:
+                tb.stop()
+                tb.wait()
+            except Exception:
+                pass
+            try:
+                tb.disconnect_all()
+            except Exception:
+                pass
+        self.tb = None
+        self.tone = None
+        self.sink = None
+        self.decim = None
+        self.listeners = []
+        gc.collect()
+
     def write_log(self) -> Path:
         path = Path(self.opts.out_dir) / f"{self.sched.session_id}_session.json"
         path.parent.mkdir(parents=True, exist_ok=True)
