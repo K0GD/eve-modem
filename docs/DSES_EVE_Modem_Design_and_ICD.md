@@ -4,11 +4,11 @@
 | | |
 |---|---|
 | Document | DSES EVE Modem Design and ICD |
-| Revision | Rev B — DRAFT, team review comments incorporated |
-| Date | 2026-09-11 |
+| Revision | Rev C — DRAFT, updated from the implementation |
+| Date | 2026-09-12 |
 | Prepared by | Rick Hambly, K0GD, Deep Space Exploration Society |
 | Waveform design | Pete Wyckoff, KA3WCA, Open Research Institute ("Venus Bounce Transmitter Spiral #2") |
-| Status | Design baseline; parameters marked TBC await confirmation from ORI. Rev B incorporates the review comments of 2026-09-10 from Michelle Thompson (ORI: the notebook's date-resolved distance and Venus albedo) and Alex Nersesian (DSES: the 23 cm station chain, with the transverter bypassed, the 1200 W amplifier, and the items the station must build) |
+| Status | Design baseline; parameters marked TBC await confirmation from ORI. Rev C records what building the modem taught (2026-09-11): the frame-numbering and chunk-table semantics, what the pilot can and cannot do, the two-stage receive front end, the arming lead the radio needs, and the state of the validation plan through the B210 loopback bench. Rev B (2026-09-11) carried the team review comments of Michelle Thompson and Alex Nersesian |
 
 This document describes the DSES implementation of the ORI Earth-Venus-Earth (EVE)
 waveform for the Venus inferior conjunction of 24 October 2026, and it defines every
@@ -85,7 +85,9 @@ The design decisions in this revision:
   0.35-second frame belongs to which symbol; GPS time on the B210 and a shared UTC epoch
   provide that to a millisecond (section 4.3).
 - **Validation runs simulation first, then B210 loopback, then a low-power Earth-Moon-Earth
-  test, then Venus** (section 5.4).
+  test, then Venus** (section 5.4). As of 2026-09-12 the modem is implemented through the
+  B210 loopback bench: the whole chain from schedule to offline decode ran on the bench
+  radio with both message passes decoded (section 5.4).
 
 # 2. Mission context
 
@@ -126,7 +128,7 @@ printout, which brackets the orbit at 38 and 261 million km, is at a fixed dista
 anchor row reproduces that printout to show the extraction is faithful, and the 2.8 million
 km between the bracket and conjunction day is worth 1.2 dB.
 
-<!-- widths: 3.0,0.8,0.6,0.8,1.5 -->
+<!-- widths: 3.3,0.7,0.6,0.7,1.4 -->
 | Case (2026-10-24 distance unless noted) | C/N0 (dB-Hz) | Tsys (K) | Margin to 0 dB-Hz | Basis |
 |---|---|---|---|---|
 | DSES monostatic, 2304 MHz, 1500 W, at the notebook's 38 million km | +1.7 | 76 | +1.7 | anchor: reproduces the notebook's +1.67 |
@@ -305,7 +307,7 @@ partner station.
 | Mode | Transmit | Receive | Schedule |
 |---|---|---|---|
 | Monostatic (baseline) | DSES, chunked | DSES, own echo, between chunks | Chunk length ≤ round trip; receive window = chunk + round trip |
-| Bistatic transmit | DSES, continuous 30-min message, repeated | Partner station | Continuous, repeat count N; partner receives the schedule file |
+| Bistatic transmit | DSES, message repeated; chunked only by the amplifier's duty limits (no echo wait) | Partner station | Chunks of T_on with T_off gaps, repeat count N; partner receives the schedule file. Continuous only if the amplifier can run the full 30 minutes |
 | Bistatic receive | Partner | DSES | DSES receives the partner's schedule file |
 | EME test | DSES, chunks of ≤ 2.5 s (Moon round trip) | DSES | Same machinery, `target=moon`, shorter symbol |
 | Bench | B210 internal leakage, no PA | B210 | Loopback, noise added offline |
@@ -334,12 +336,14 @@ and fills the 90-bit field exactly (a 12th character would be truncated). Append
 the payload, the codeword, and the 11 symbols for that text, computed with ORI's own
 generator, as the project's reference test vector.
 
-The frame is the unit everything is scheduled in. Frames are numbered from the schedule
-epoch; frame k carries symbol floor(k / 473) mod 11 of message repetition floor(k / 5203).
-A transmitter sends whichever frames its schedule says are on; a receiver files every frame
-it receives into the accumulator of the symbol that frame belongs to. Because detection is
-non-coherent, frames of one symbol need not be contiguous in time, which is what makes
-chunking possible.
+The frame is the unit everything is scheduled in. Frame k is the k-th frame the session
+transmits: it carries symbol floor(k / 473) mod 11 of message repetition floor(k / 5203),
+and frames are counted only while the transmitter is on, so the off periods between chunks
+do not consume frames. The schedule's chunk table (section 8.1) maps each frame range to
+its UTC transmit time; within a chunk, frames follow one another every 1/2.87 s. A receiver
+files every frame it receives into the accumulator of the symbol that frame belongs to.
+Because detection is non-coherent, frames of one symbol need not be contiguous in time,
+which is what makes chunking possible.
 
 ## 4.2 Monostatic chunking
 
@@ -385,9 +389,11 @@ have the tone land within a fraction of a 2.87 Hz bin for the whole symbol.
 - **Time.** A GPS-disciplined 10 MHz and 1 PPS go into the B210's REF IN and PPS IN. The
   modem sets the USRP time to UTC on a PPS edge, so every transmitted sample and every
   received sample carries a UTC timestamp good to well under a millisecond. The schedule
-  epoch is a UTC instant; frame boundaries are epoch + k × 0.34843 s. The receiver maps
-  arrival time to frame number through the ephemeris round-trip time. The tolerance is a
-  fraction of a frame (tens of milliseconds); GPS provides microseconds.
+  epoch is a UTC instant; within a chunk, frame boundaries are the chunk's start + j ×
+  0.34843 s. The receiver maps arrival time to frame number through the ephemeris
+  round-trip time. The tolerance is about one frame: every frame of a symbol carries the
+  same tone, so a one-frame grid error costs 1/473 of the symbol's energy (verified in
+  simulation, section 5.4), and GPS provides microseconds.
 - **Frequency.** The same GPSDO disciplines the B210's master clock. A B210 on its internal
   TCXO is ±2 ppm, or ±4.6 kHz at 2304 MHz with drift of tens of hertz per session; that
   alone would defeat a 2.87 Hz receiver. Locked to a GPSDO the reference is 1e-11 or better,
@@ -428,10 +434,16 @@ the frames per symbol, worth 10 log10 N dB of sensitivity: two passes buy 3 dB, 
 schedule file carries the repeat count.
 
 An optional **pilot** reserves a known tone for the first 40 frames (14 s) of each chunk.
-It costs 6 percent of throughput and lets the receiver verify the timing and Doppler model
-live, at the start of each chunk, rather than discovering after 64 minutes that the epoch
-was off by a frame. The pilot is on for the EME test and for the first Venus sessions; it
-is a schedule flag, not a waveform change.
+It costs 6 percent of throughput and lets the receiver check the frequency model and the
+signal's presence live, at the start of each chunk. What it can and cannot do follows from
+the waveform: a tone that is constant for 40 frames carries timing information only at
+its two edges, so the pilot measures the frequency offset well (to R_bw / 8 by summing
+the frames' power in a zero-padded FFT) and confirms presence, but at the 0 dB-Hz design
+point 40 frames give only about a 2-sigma presence detection and a 1-sigma decision
+between adjacent whole-frame epochs. Timing of record is therefore GPS plus the
+ephemeris (section 4.3); the pilot is a live sanity check at Venus and a decisive one
+at EME strength. The pilot is on for the EME test and for the first Venus sessions; it is
+a schedule flag, not a waveform change.
 
 ## 4.6 The EME proof test
 
@@ -483,8 +495,10 @@ Radio only in the two blocks that touch the radio:
 | `sigmf_io.py` | Export in ORI's SigMF form (`ori:design` block) plus a `dses:` block; import of ORI files for playback. |
 | `gr_blocks.py` | `EveToneSource` (schedule-driven NCO source at the radio rate) and `EveRxSink` (decimate to the modem rate, archive IQ, feed the live accumulators). |
 | `radio.py` | B210 setup: external reference and PPS, `ref_locked` readback, UTC time set on PPS, IF-offset tune with readback verification, rate readback, GPIO keying line. Factored from the Workbench (section 9). |
-| `station.py` | Key-down and cooldown interlocks, PA duty enforcement, abort, session log. |
-| `tools/` | `eve_bench.py` (loopback soak, underrun and gap counters, offline noise injection), `eve_session.py` (run a schedule), `eve_decode.py` (offline decode of an archive). |
+| `station.py` | Key-down and cooldown interlocks, PA duty enforcement, abort, session log; one flowgraph per session; a simulated radio (delay line plus AWGN) for the software bench. |
+| `display.py` | Operator display (PySide6 and pyqtgraph): tone strip, accumulated metric of the current symbol, running decisions with margins, chunk and keying state, radio status, ephemeris, abort. |
+| `_workbench.py` | Finds the Workbench clone and imports its shared `dses_radio.py` (section 9). |
+| `tools/` | `eve_session.py` (plan a session from Horizons, run a schedule on the radio, or simulate it), `eve_decode.py` (offline decode of an archive, the decision of record), `eve_bench.py` (B210 loopback). |
 
 ## 5.2 Transmit path
 
@@ -501,10 +515,18 @@ always so assigned; the modem refuses to start if the receive port is on TX/RX.
 
 ## 5.3 Receive path
 
-`EveRxSink` takes the B210 stream (radio rate = 32 × modem rate, nominal 1.5047 MS/s),
-mixes down by the IF offset and comb center, applies the receive Doppler NCO, decimates by
-32 to the modem rate 47,022.08 S/s, and writes the result to the session archive as
-complex64 with a JSON sidecar (section 8.2). At 376 kB/s a full 6-hour window is 8 GB;
+A two-stage front end takes the B210 stream (radio rate = 32 × modem rate, nominal
+1.5047 MS/s) to the modem rate: a frequency-translating complex band-pass filter mixes the
+comb down by the IF offset (plus the bulk Doppler when this receiver is not the
+pre-compensated one, stepped once a second from the model) and decimates by 16, then a
+sharp low-pass at the intermediate rate decimates by 2. Two stages because the comb fills
+the modem-rate Nyquist band exactly (M × 2 R_bw = N_fft × R_bw by construction): the
+second stage is flat to 99.5 percent of the bandwidth with its transition centered on
+Nyquist, so only the last few tones sit in the transition band and take alias noise. A
+single-stage design cut the top tones by 8 dB. `EveRxSink` then writes the stream to the
+session archive as complex64 with a JSON sidecar (section 8.2), one file per receive
+window, time-stamped from the radio's `rx_time` tags and zero-padded across overflows so
+the sample clock stays honest. At 376 kB/s a full 6-hour window is 8 GB;
 the archive is always written so any session can be re-decoded offline with a different
 schedule, Doppler model, or receiver. In parallel the live receiver runs the 16,384-point
 frame FFT bank, files frame magnitudes into the symbol accumulators, and shows the running
@@ -515,16 +537,16 @@ decision of record is the offline decode of the archive after the session.
 
 ## 5.4 Validation plan
 
-<!-- widths: 0.5,4.0,2.2 -->
-| Stage | What | Gate |
-|---|---|---|
-| 0 | Reference vectors: ORI generator output for a fixed message; BCH round trip against `galois` | Bit-exact symbols and codeword |
-| 1 | Modulator: DSES streaming synthesizer vs ORI file for the same message, same rate | Tones and phase match to float tolerance |
-| 2 | Receiver in simulation: Pete's channel (Rayleigh) and ORI's AWGN model; frames-per-symbol sweep | Reproduces both curves; Rayleigh margin stated |
-| 3 | Streaming realism: Doppler ramp, chunk gaps, wrong epoch; real CAMRAS Venus echoes (March 2025, public) through the FFT bank | Decodes at the design point with a 0.5 Hz/s ramp; pilot recovers a wrong epoch |
-| 4 | B210 loopback on the bench: 4-minute chunk soak, underruns, reference lock, rate readback, transmit frequency vs the lab GPS reference on the E4438C / 53230A | Zero underruns, frequency within 0.1 Hz |
-| 5 | EME at very low power | End-to-end decode at C/N0 near 0 dB with the station's own keying |
-| 6 | Venus, sessions from mid October | |
+<!-- widths: 0.5,2.9,1.8,1.5 -->
+| Stage | What | Gate | Status 2026-09-12 |
+|---|---|---|---|
+| 0 | Reference vectors: ORI generator output for a fixed message; BCH round trip against `galois` | Bit-exact symbols and codeword | Passed: Appendix C bit-exact; BCH matches `galois` on encode and on up to three errors |
+| 1 | Modulator: DSES streaming synthesizer vs ORI file for the same message, same rate | Tones and phase match to float tolerance | Passed: phase constant within every symbol against ORI's equation; ORI's own smoke file read back |
+| 2 | Receiver in simulation: Pete's channel (Rayleigh) and ORI's AWGN model; frames-per-symbol sweep | Reproduces both curves; Rayleigh margin stated | Passed: Variant A reproduces ORI's table; Variant B +1.1 dB |
+| 3 | Streaming realism: Doppler ramp, chunk gaps, wrong epoch; real CAMRAS Venus echoes (March 2025, public) through the FFT bank | Decodes at the design point with a 0.5 Hz/s ramp; pilot recovers a wrong epoch | In part: 0.48 Hz/s ramp pre-compensated and receiver-removed, gaps, one-frame epoch error, four-pass combining all decode in simulation; CAMRAS echoes not yet run |
+| 4 | B210 loopback on the bench: 4-minute chunk soak, underruns, reference lock, rate readback, transmit frequency vs the lab GPS reference on the E4438C / 53230A | Zero underruns, frequency within 0.1 Hz | In part (2026-09-11): 22 chunks at minimum TX gain, both passes decoded at about 25 dB margin, no underruns, rate read back 0.3 ppm off nominal, PPS verified; GPS reference lock and the frequency check against the lab reference still to do (O16) |
+| 5 | EME at very low power | End-to-end decode at C/N0 near 0 dB with the station's own keying | Not started |
+| 6 | Venus, sessions from mid October | | |
 
 # 6. ICD part A — the air interface
 
@@ -535,7 +557,7 @@ Pete Wyckoff and Michelle Thompson (asked 2026-09-09).
 
 ## 6.1 Waveform parameters
 
-<!-- widths: 1.6,0.7,1.5,2.9 -->
+<!-- widths: 1.5,0.9,1.4,2.9 -->
 | Parameter | Symbol | Value | Source and notes |
 |---|---|---|---|
 | Modulation | | 4096-ary orthogonal FSK, non-coherent | Pete Wyckoff, Spiral #2 |
@@ -606,12 +628,16 @@ symmetrically about DC; that convention is not used on the air.
 
 ## 6.4 Frame and schedule timing
 
-- Frames are numbered k = 0, 1, 2 … from the schedule epoch t_0 (UTC); frame k occupies
-  transmit time [t_0 + k × T_frame, t_0 + (k+1) × T_frame).
+- Frames are numbered k = 0, 1, 2 … over the frames the session transmits. The schedule's
+  chunk table gives each chunk its first and last frame and its transmit start t_c (UTC);
+  frame k of that chunk occupies transmit time [t_c + (k − k_first) × T_frame, t_c +
+  (k − k_first + 1) × T_frame). A continuous session is one chunk with t_c = t_0.
 - Symbol index m(k) = floor(k / N_frames) mod N_sym; repetition r(k) = floor(k / (N_frames × N_sym)).
-- A transmitter emits frame k only if k lies in one of the schedule's on-windows.
-- A receiver expects frame k at t_0 + k × T_frame + RTT(t), where RTT is evaluated at the
+- A transmitter emits only the frames in the chunk table; between chunks it is silent and
+  no frames are consumed.
+- A receiver expects frame k at its transmit time + RTT(t), where RTT is evaluated at the
   transmit time from the schedule's ephemeris, and files it into accumulator (r, m(k)).
+  The frame grid need only be right to about one frame (section 4.3).
 - Optional pilot: the first N_pilot frames (default 40) of every on-window carry tone
   d_pilot (default 2048) instead of the message symbol; the receiver excludes them from the
   symbol accumulators.
@@ -643,17 +669,18 @@ the entries marked TBD need them.
 | Hub modules | Two of the EVE25 package's three modules are used, the final SSPA and the CMU (its control and monitoring unit); the RF module, which is the transverter, is not (Alex Nersesian, 2026-09-10) |
 | Receive port | RX2 A, from the LNA. RX gain set for the receiver noise to sit 10–15 dB above the B210 floor (verified live with the tone-strip display) |
 | Cabling to the RF package | The B210 has separate transmit and receive ports, so three runs connect it to the RF package in the hub: one coax carrying transmit drive from TX/RX A, one coax carrying the LNA output to RX2 A, and one keying line (Rick, 2026-09-10). TBD: run lengths, losses at 1299.5 and 2304 MHz, and connector types at each end |
-| Sample rate | 32 × modem rate: 1,504,706.56 S/s (Variant A) or 786,432 S/s (Variant B); actual UHD rate read back and the residual absorbed by the frequency tracker |
-| Tuning | f_dial with the verified LO-offset method inherited from the Workbench; the LO is parked off the comb so its leakage never lands on a tone |
-| Reference | REF IN: 10 MHz from the station GPSDO, [+3 to +15 dBm, 50 Ω]. PPS IN: 1 PPS, 3.3 V logic. The modem refuses to start a session unless `ref_locked` reads true. TBD: which GPSDO is at Plishner and its outputs |
-| Time | USRP time set to UTC at a PPS edge from the host's NTP/GPS time; verified against a second PPS before the session |
+| Sample rate | 32 × modem rate: 1,504,706.56 S/s (Variant A) or 786,432 S/s (Variant B); actual UHD rate read back (the bench B210 runs 1,504,707.01 S/s, 0.3 ppm high) and the residual absorbed by the frequency tracker |
+| Tuning | f_dial with the verified LO-offset method inherited from the Workbench, in both directions: the LO is parked 300 kHz below the dial frequency so its leakage sits far outside the receive front end's passband and never aliases into the comb (with the LO on the dial frequency, its leakage 25 kHz below tone 0 would fold into the comb after decimation). If the offset cannot be applied honestly the radio says so and the session tool decides |
+| Reference | REF IN: 10 MHz from the station GPSDO, [+3 to +15 dBm, 50 Ω]. PPS IN: 1 PPS, 3.3 V logic. The modem refuses to start a session unless `ref_locked` reads true (the sensor reports lock to an external or GPSDO reference only; it reads false on the internal reference, which the bench uses). TBD: which GPSDO is at Plishner and its outputs (O3, O16) |
+| Time | USRP time set to UTC at a PPS edge from the host's NTP/GPS time; verified against a second PPS before the session. The sample clock is then the schedule clock: the transmit stream starts at a device time given by a `tx_time` tag and the receive stream at the same time, so sample n is device time t_0 + n / f_s exactly |
+| Arming | Starting the flowgraph with both USRP streamers takes about 4 s on the Windows bench, so the session arms the streams [8 s] before the first scheduled sample. A late timed start drops the whole transmit stream and the receive start command, which is how this number was learned |
 
 ## 7.2 Keying and sequencing
 
 <!-- widths: 1.2,5.5 -->
 | Interface | Specification |
 |---|---|
-| Keying output | One logic line from the B210 GPIO header (J504, 3.3 V, [FP0 bank, line 0]) through an isolated driver, or a USB relay if the station prefers. Asserted for the whole on-window |
+| Keying output | One logic line from the B210 GPIO header (J504, 3.3 V, [FP0 bank, line 0]) through an isolated driver, or a USB relay if the station prefers. Asserted for the whole on-window. The line is driven host-timed from the session's keyer thread (UHD's timed GPIO commands did not defer on the bench build); with T_lead of 200 ms, host timing is more than adequate, and a watchdog drops the line if a chunk overruns |
 | Sequencer timing | Key asserted [T_lead = 200 ms] before the first non-zero sample; RF stopped [T_lag = 100 ms] before the key is released. The station builds an LNA sequencer and an LNA DC control circuit, both mandatory (Alex Nersesian, 2026-09-10); TBD: their input line type and actual lead and lag requirements (O5) |
 | Duty limits | The modem enforces T_on ≤ [300 s] and T_off ≥ [240 s] per chunk regardless of the schedule; a schedule violating them is refused. TBD: the amplifier's true thermal limits and whether 4-minute chunks are acceptable. The thermal test needs a 2 kW 50 Ω load with a 7/16 DIN connector, which the station does not yet have (O6) |
 | Abort | Operator abort or any fault (reference unlock, underrun burst, USB error) releases the key immediately and logs the frame number |
@@ -706,11 +733,17 @@ its decode directly.
 
 ## 8.2 Receive archive
 
-`<session_id>_<chunk>.eve.iq` — complex64, little-endian, interleaved I/Q at the modem
-rate, one file per receive window, plus `<session_id>_<chunk>.json` with: start UTC from
-the USRP time, sample rate, f_dial, f_IF, the Doppler model that was applied on receive,
-frame number of the first sample, gain, reference-lock state, and overflow count. The
-archive is what the offline decoder reads and what is shared for independent decoding.
+`<session_id>_<NN>.eve.iq` — complex64, little-endian, interleaved I/Q at the modem rate
+with tone 0 at DC, one file per receive window (NN = chunk index), plus
+`<session_id>_<NN>.json` (`schema: dses-eve-archive/1`) with: the start of the first
+sample as device time and UTC (from the radio's `rx_time` tags), the receive window,
+sample rate and datatype, sample count, the first frame number and the first sample's
+offset into it in frames, f_dial, f_IF, whether the transmitter pre-compensated and
+whether the model Doppler was removed on receive, the radio description, the overflow
+gap count and list, and the waveform parameters. The archive is what the offline decoder
+reads and what is shared for independent decoding. It is written at the modem rate at
+baseband deliberately: an IF-offset stream at the modem rate would alias, since the comb
+is half the modem rate wide.
 
 ## 8.3 SigMF interchange
 
@@ -722,9 +755,11 @@ for cross-checks against the streaming synthesizer.
 
 ## 8.4 Session log and report
 
-Every session writes a plain-text log (UTC, frame numbers, key events, underruns,
-overflows, reference state, aborts) and, after the offline decode, a one-page PDF report in
-the DSES house style: schedule summary, tone-strip image per symbol, decoded symbols
+Every session writes `<session_id>_session.json` (start and finish UTC, radio
+description, key events with device times, chunks keyed, frames sent, the receive report
+with gap counts and file list, the live decode, abort state and reason, the schedule and
+the options that ran) and, after the offline decode, a one-page PDF report in the DSES
+house style: schedule summary, tone-strip image per symbol, decoded symbols
 against the transmitted ones, BCH corrections used, CRC result, and estimated C/N0 from the
 accumulators. The report is the deliverable of a session.
 
@@ -735,8 +770,12 @@ code-sharing boundary, not a runtime one:
 
 - The Workbench's B210 classes (device discovery, `UhdB200Source`, the verified LO-offset
   tune path, the deep-buffer and real-time-mode helpers) are factored out of
-  `dses_workbench.py` into an importable module that both projects use. The Workbench's
-  behavior does not change; this is a refactor the Workbench benefits from on its own.
+  `dses_workbench.py` into an importable module that both projects use. Done 2026-09-11:
+  `dses_radio.py` in the Workbench repository, shipped with it; the Workbench imports the
+  same names and its behavior is unchanged; the modem finds the Workbench clone (or the
+  `DSES_WORKBENCH` variable) and imports the module from there. New in it for the modem:
+  the tune path as a function usable on a transmit sink, reference and PPS time-set
+  helpers, and the GPIO keying line.
 - The Workbench's `FilterbankSink` pattern (a GNU Radio sink with a deep queue and a close
   method that reports gaps) is the template for `EveRxSink`.
 - The pulsar planner's site and visibility code is reused for the Venus and Moon windows.
@@ -769,6 +808,11 @@ code-sharing boundary, not a runtime one:
 | D15 | Link budget rows come from ORI's own classes, run by `link_budget/dses_cases.py` at the 2026 distance | Reproducible; one command when a station number changes |
 | D16 | The B210 generates 1299.5 MHz directly; the EVE25 transverter is bypassed and a 2 W driver feeds the final SSPA | The transverter covers 1296 to 1298 MHz only; the SSPA covers 1280 to 1300 MHz (Alex Nersesian and Rick, 2026-09-10) |
 | D17 | The link budget is stated at ORI's static albedo (0.152) and at ORI's date-resolved albedo for conjunction (0.117) | Michelle Thompson's review of 2026-09-10: the notebook resolves distance and albedo per date; DSES plans on the value behind the CAMRAS cross-check and carries the 1.1 dB pessimistic case |
+| D18 | Frames count transmitted frames; the chunk table maps frame ranges to UTC | Off periods consume no frames, so a message is 5,203 transmitted frames however it is chunked (sections 4.1, 6.4) |
+| D19 | Timing of record is GPS plus the ephemeris; the pilot measures frequency offset and presence and checks the epoch to a whole frame | A steady tone carries timing information only at its edges; a one-frame grid error costs 1/473 (sections 4.3, 4.5) |
+| D20 | Two-stage receive front end, flat to 99.5 percent of the bandwidth | The comb fills the modem-rate Nyquist band exactly; one stage cut the top tones by 8 dB (section 5.3) |
+| D21 | Bistatic transmit is chunked by the amplifier's duty limits | The 30-minute message exceeds the 5-minute on-limit; the partner's non-coherent receiver does not care about gaps (section 3.3) |
+| D22 | Host-timed keying with an 8 s arming lead for the radio streams | Timed GPIO did not defer on the bench build; flowgraph start with two streamers takes about 4 s (sections 7.1, 7.2) |
 
 ## 10.2 Open issues
 
@@ -790,6 +834,8 @@ code-sharing boundary, not a runtime one:
 | O13 | 13 cm band: 2304 or 2400 MHz, and the feed for it | DSES station team | Next apparition |
 | O14 | The DEFCON group's receiver (over-the-air test and code check-in expected the weekend of 2026-09-12): obtain it when it lands in the ORI repository and cross-check it against the DSES receiver with the Appendix C test vector | DSES / ORI | When published |
 | O15 | Date-resolved albedo: ask ORI for ρ_eff on the March 2025 CAMRAS dates, to learn whether the validated value already reflects it, and for the 2028 window; raise at the ORI meetup of 2026-09-15 | DSES → ORI | Before Venus |
+| O16 | GPS reference on the bench: a GPSDO's 10 MHz and PPS into the B210 to prove `ref_locked` and the UTC set against a real PPS, and the transmit frequency against the lab reference (stage 4's remaining gate) | Rick | Before EME test |
+| O17 | The CAMRAS Venus echoes of March 2025 through the receiver (stage 3's remaining item) | DSES | Before Venus |
 
 # Appendix A — MATLAB simulation versus Python implementation
 
@@ -819,6 +865,9 @@ in section 6 follows the Python.
 - 4-minute chunk: 240 s = 688.8 frames; the schedule rounds chunks to whole frames (688
   frames = 239.7 s), so a message needs 5,203 / 688 = 7.56 → 8 chunks.
 - Round trip 2026-10-24: 2 × 40.8 million km / c = 272 s; ephemeris-computed per session.
+  JPL Horizons and astropy's built-in ephemeris differ by 230 km in range and 0.7 m/s in
+  range rate at conjunction, which is 10 Hz (3.5 bins) at 2304 MHz: Horizons is the
+  primary source, astropy the offline fallback (section 4.3).
 - Doppler across one symbol at the peak rate: 2304 MHz, 0.48 Hz/s × 164.8 s = 79 Hz =
   13.8 tone spacings; 1299.5 MHz, 0.27 Hz/s × 164.8 s = 45 Hz = 7.8 spacings. Across one
   frame: 0.17 Hz (0.06 bin) and 0.09 Hz.
@@ -861,4 +910,5 @@ as symbols 4 to 6, because 48 bits of message repeat exactly 48 bits later.
 | Rev A draft 3 | 2026-09-10 | Rick's review: link budget recomputed row by row with ORI's classes at the 2026 distance (`link_budget/`); Variant B for DSES 23 cm monostatic (2.4, 6.1.1, Figure 2, D13); message K0PRT K0PRT and Appendix C test vector (D14); US spelling; table and paragraph pagination rules; narrower register columns |
 | Rev A draft 4 | 2026-09-10 | Table pagination (header keeps with first row, short tables whole); the monostatic-23 cm verdict with passes to combine; the 2028 apparition (geometry and link budget); beamwidth figures corrected (0.88° at 23 cm, 0.50° at 13 cm) |
 | Rev A draft 5 | 2026-09-10 | Issued to the EVE team for review (nine recipients, 17:57 MDT); section 7.1 gains the B210-to-RF-package cabling row (two coax plus key line) from the issuing email |
+| Rev C | 2026-09-12 | Updated from the implementation of 2026-09-11 (modem core, ephemeris, schedule, synchronization, radio side, operator display; 36 tests; B210 loopback bench decoded): frame numbering and chunk-table semantics (4.1, 6.4, D18); the pilot's real capability and the one-frame timing tolerance (4.3, 4.5, D19); two-stage receive front end (5.3, D20); bistatic chunking (3.3, D21); host-timed keying and the 8 s arming lead (7.1, 7.2, D22); module table, validation status column, archive and session-log contents as built (5.1, 5.4, 8.2, 8.4); the shared radio module done (9); O16, O17 |
 | Rev B | 2026-09-11 | Team review comments incorporated. Michelle Thompson (ORI): the notebook's date-resolved distance (Skyfield, 40.81 million km on 2026-10-25) and dynamic Venus albedo (0.117 at conjunction, −1.1 dB) in section 2.2 (D17, O15); ORI's DEFCON-group receiver noted (section 1, O14). Alex Nersesian (DSES): the transverter covers 1296 to 1298 MHz only and is bypassed (D16); SSPA 1280 to 1300 MHz, 1200 W CW, at least 2 W drive; LNA sequencer, LNA DC control, 2 W driver, and receive bandpass filter to be built; a 2 kW 7/16 DIN load for the thermal test; the feed retunes (sections 2.3, 7.1 to 7.3, O2, O4 to O6). 1200 W rows in the link budget and Figure 2 |
