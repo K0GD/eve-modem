@@ -46,7 +46,7 @@ _CMD_OUTPUT, _CMD_IDENTIFY, _CMD_LEVEL, _CMD_PLL = 1, 2, 3, 4
 _REPORT_CONFIG = 9
 
 F3_MIN, F3_MAX = 10_000, 2_000_000
-FOSC_MIN, FOSC_MAX = 4_850_000_000, 5_670_000_000
+FOSC_MIN, FOSC_MAX = 4_850_000_000, 6_200_000_000    # the vendor's own program uses 6.1 GHz (bench 2026-09-12)
 FOUT_MIN, FOUT_MAX = 450, 808_000_000
 DEFAULT_PLAN_10MHZ = dict(n3=5, n2_hs=11, n2_ls=512, n1_hs=11, nc1_ls=48, nc2_ls=48, skew=0, bw=15)
 
@@ -320,11 +320,19 @@ def preflight(serial: Optional[str] = None, f1: float = 10e6, level: int = 1, ap
         cfg = g.config()
         changed = False
         want = Fraction(f1).limit_denominator(1000)
-        # the modem's standard setup: BOTH outputs 10 MHz at level 1 (OUT1 -> B210 REF IN,
-        # OUT2 spare for the station's other 10 MHz loads); this unit cannot make 1 PPS
-        if apply and (cfg.plan.fout1 != want or cfg.plan.fout2 != want or cfg.level != level
-                      or not cfg.out1_on or not cfg.out2_on):
-            cfg = g.apply(f1, f1, level, out2=True)
+        # The modem's standard setup (Rick, 2026-09-12): OUT1 = 10 MHz at level 1 (16 mA,
+        # about +11 dBm into the B210's REF IN, whose maximum is +15 dBm), OUT2 OFF. The
+        # oscillator plan is left alone whenever OUT1 already reads 10 MHz exactly (the
+        # vendor program picks its own plan, e.g. fin 97.6 kHz / 6.1 GHz); only a wrong
+        # OUT1 frequency triggers a new plan. This unit cannot make 1 PPS.
+        if apply and cfg.plan.fout1 != want:
+            cfg = g.apply(f1, None, level, out2=False)
+            changed = True
+        elif apply and (cfg.level != level or not cfg.out1_on or cfg.out2_on):
+            g.set_level(level)
+            g.set_outputs(True, False)
+            time.sleep(0.2)
+            cfg = g.config()
             changed = True
         st = g.wait_lock(lock_timeout_s)
         return {"serial": g.serial, "product": g.product, "changed": changed, "config": cfg.summary(),
@@ -343,7 +351,7 @@ def main(argv=None):
     pl = sub.add_parser("plan"); pl.add_argument("f1", type=float); pl.add_argument("f2", type=float, nargs="?")
     st = sub.add_parser("set"); st.add_argument("--out1", type=float, default=10e6); st.add_argument("--out2", type=float, default=None)
     st.add_argument("--level", type=int, default=None); st.add_argument("--off2", action="store_true")
-    sub.add_parser("restore-default", help="both outputs 10 MHz, level 1 (16 mA), the factory plan")
+    sub.add_parser("restore-default", help="the plan read from the unit as delivered: both outputs 10 MHz, level 1 (16 mA)")
     sub.add_parser("identify")
     sub.add_parser("preflight")
     a = ap.parse_args(argv)
