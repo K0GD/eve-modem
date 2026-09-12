@@ -319,8 +319,12 @@ def preflight(serial: Optional[str] = None, f1: float = 10e6, level: int = 1, ap
     try:
         cfg = g.config()
         changed = False
-        if apply and (cfg.plan.fout1 != Fraction(f1).limit_denominator(1000) or cfg.level != level or not cfg.out1_on):
-            cfg = g.apply(f1, None, level, out2=cfg.out2_on)
+        want = Fraction(f1).limit_denominator(1000)
+        # the modem's standard setup: BOTH outputs 10 MHz at level 1 (OUT1 -> B210 REF IN,
+        # OUT2 spare for the station's other 10 MHz loads); this unit cannot make 1 PPS
+        if apply and (cfg.plan.fout1 != want or cfg.plan.fout2 != want or cfg.level != level
+                      or not cfg.out1_on or not cfg.out2_on):
+            cfg = g.apply(f1, f1, level, out2=True)
             changed = True
         st = g.wait_lock(lock_timeout_s)
         return {"serial": g.serial, "product": g.product, "changed": changed, "config": cfg.summary(),
