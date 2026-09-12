@@ -72,6 +72,14 @@ Every control has a tooltip: hover over it or its label. The essentials:
 | EME | Moon bounce. Ephemeris from JPL Horizons, Doppler pre-compensated, transmit 2.4 s then listen for the 2.5 s echo, repeat. The rehearsal before Venus. |
 | EVE | Venus bounce. 240 s transmit chunks against the 272 s round trip. A full message is 30.2 minutes per pass; plan five passes. |
 
+**Set defaults for this run mode** puts every setting the mode cares about back to the
+design value: frequency, repeat count, symbol length, gains, chunking, timing, Doppler.
+The status line lists what changed. Changing the run mode, the variant, the symbol length,
+or the interop direction also applies a few consistency rules (a sky session gets
+full-length symbols and an external clock, Venus gets 1299.5 MHz and the amplifier
+limits, a Variant B chunk grows to hold the pilot, receive-only interop drops the pilot)
+and says so in the teal line under the run modes.
+
 ## 4.2 Waveform and message
 
 - **Variant** A is the ORI air interface (2.87 Hz bins, 473 frames per symbol). Use A
@@ -93,8 +101,10 @@ Every control has a tooltip: hover over it or its label. The essentials:
   start unless the B210 reports lock.
 - **Time**: leave host-timed unticked when the PPS is connected. Tick it only if there
   is no PPS; the epoch then comes from the PC clock, still inside the tolerance.
-- **GPS clock**: ticked, the program sets the Leo Bodnar clock to the station setting
-  and waits for lock before opening the radio.
+- **Clock source** has a sub-item: tick "the external reference is the Leo Bodnar GPS
+  clock on USB" when that clock is the reference; the program then sets it to the
+  station setting and waits for lock before opening the radio. With the HP5065A rubidium
+  (plus a PPS source) back in service, untick it; the B210's own lock check still runs.
 - **Archive folder**: where the run's files go.
 
 ## 4.4 Mode settings

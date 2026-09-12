@@ -20,13 +20,14 @@ import os
 os.environ.setdefault("PYQTGRAPH_QT_LIB", "PySide6")
 
 import json
+import math
 import sys
 import threading
 import time
 import traceback
 from dataclasses import replace
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -45,6 +46,27 @@ MODES = [("sim", "Software simulation (no radio)"),
 PREFIX = {"sim": "SIM", "bench": "BENCH", "interop": "INTEROP", "eme": "EME", "eve": "EVE"}
 TARGET = {"sim": "sim", "bench": "bench", "interop": "partner", "eme": "moon", "eve": "venus"}
 FULL_FRAMES = {"A": 473, "B": 247, "MATLAB": 540}
+
+# "Set defaults" for a run mode: every setting the mode cares about goes to the design
+# value (the design document's numbers; bench values from the 2026-09-11/12 loopback).
+COMMON_DEFAULTS = {"variant": "A", "message": "K0PRT K0PRT", "pilot": True, "n_frames_test": 6, "pilot_frames_test": 2,
+                   "clock": "external", "time_host": False, "gpsdo": True, "lo_offset_khz": -300.0, "serial": ""}
+MODE_DEFAULTS = {
+    "sim": {"f_dial_mhz": 1296.0, "repeat": 1, "full_symbol": False, "sim_cn0": 20.0, "sim_range_km": 375000.0,
+            "sim_seed": 1, "bench_chunk_s": 2.4, "bench_t_off_min": 0.5, "lead_s": 12.0},
+    "bench": {"f_dial_mhz": 1296.0, "repeat": 2, "full_symbol": False, "tx_gain": 0.0, "rx_gain": 30.0,
+              "bench_range_km": 0.15, "bench_chunk_s": 2.4, "bench_t_off_min": 0.5, "lead_s": 15.0},
+    "interop": {"f_dial_mhz": 1296.0, "repeat": 1, "full_symbol": True, "tx_gain": 30.0, "rx_gain": 30.0,
+                "interop_chunk_s": 300.0, "interop_search_frames": 30, "sky_start_now": True, "lead_s": 30.0},
+    "eme": {"f_dial_mhz": 1296.0, "repeat": 2, "full_symbol": True, "tx_gain": 0.0, "rx_gain": 40.0,
+            "eme_chunk_s": 2.4, "eme_rtt_guard": 0.1, "eme_t_off_min": 0.5, "eme_t_on_max": 300.0, "eme_pa": False,
+            "sky_mode": "monostatic", "sky_source": "auto", "sky_precomp": True, "sky_rx_doppler": False,
+            "sky_start_now": True, "lead_s": 30.0},
+    "eve": {"f_dial_mhz": 1299.5, "repeat": 5, "full_symbol": True, "tx_gain": 0.0, "rx_gain": 45.0,
+            "sky_chunk_s": 240.0, "sky_rtt_guard": 30.0, "sky_t_on_max": 300.0, "sky_t_off_min": 240.0, "sky_pa": True,
+            "sky_mode": "monostatic", "sky_source": "auto", "sky_precomp": True, "sky_rx_doppler": False,
+            "sky_start_now": True, "lead_s": 60.0},
+}
 
 
 
@@ -134,6 +156,13 @@ TIPS: Dict[str, str] = {
                   "by 10 Hz at 13 cm, so Horizons is primary (design 4.3). The table used is saved with the run.",
     "sky_precomp": "Monostatic: shift the transmit tones by minus the predicted two-way Doppler so our own echo "
                    "lands on the nominal comb. Untick only when transmitting for a partner that does its own removal.",
+    "set_defaults": "Put every setting the selected run mode cares about back to the design value (frequency, "
+                    "repeat count, symbol length, gains, chunking, timing, Doppler). Settings the mode does not use are "
+                    "left alone. The status line lists what changed.",
+    "gpsdo_sub": "Tick when the external 10 MHz and PPS come from the Leo Bodnar GPS clock on this PC's USB: the "
+                 "program sets it to the station setting (OUT1 10 MHz at level 1, OUT2 disabled = 1 PPS) and waits "
+                 "for lock before opening the radio. Untick for any other reference (the HP5065A rubidium and a PPS "
+                 "source, or a GPSDO the program cannot talk to); the B210's own lock check still runs.",
     "mode:interop": "Compatibility test with ORI's own hardware and software, on the bench (cable and attenuator) "
                     "or across the room. Transmit only: we send the agreed message at the agreed UTC time and the "
                     "partner's receiver decodes it. Receive only: the partner transmits (their generator has no pilot: "
@@ -803,6 +832,7 @@ class EveApp(QtWidgets.QMainWindow):
         self._help_dlg = None
         self._load()
         self._mode_changed()
+        self._coherence()
         wrap_tooltips(self)
         for name in ("setup_split",):
             st = self.settings.q.value(name)
@@ -850,7 +880,15 @@ class EveApp(QtWidgets.QMainWindow):
             rb.setProperty("mode", key)
             self.mode_group.addButton(rb, i)
             v.addWidget(rb)
-        self.mode_group.idClicked.connect(lambda _i: self._mode_changed())
+        self.mode_group.idClicked.connect(lambda _i: self._mode_changed(user=True))
+        self.btn_defaults = QtWidgets.QPushButton("Set defaults for this run mode")
+        self.btn_defaults.setToolTip(TIPS["set_defaults"])
+        self.btn_defaults.clicked.connect(self._set_defaults)
+        v.addWidget(self.btn_defaults)
+        self.lbl_coherence = QtWidgets.QLabel("")
+        self.lbl_coherence.setWordWrap(True)
+        self.lbl_coherence.setStyleSheet(f"color: {TEAL};")
+        v.addWidget(self.lbl_coherence)
         left.addWidget(gb)
 
         # waveform
@@ -859,7 +897,7 @@ class EveApp(QtWidgets.QMainWindow):
         self.w["variant"] = cb = QtWidgets.QComboBox()
         cb.addItems(["A", "B"])
         cb.setToolTip("A: ORI 2.87 Hz bins, 473 frames per symbol. B: DSES 23 cm monostatic, 1.5 Hz bins, 247 frames (design 6.1.1)")
-        cb.currentTextChanged.connect(lambda _t: self._symbol_changed())
+        cb.currentTextChanged.connect(lambda _t: (self._symbol_changed(), self._coherence()))
         f.addRow("Variant", cb)
         self.w["f_dial_mhz"] = sp = QtWidgets.QDoubleSpinBox()
         sp.setRange(70.0, 6000.0)
@@ -880,7 +918,7 @@ class EveApp(QtWidgets.QMainWindow):
         symrow = QtWidgets.QHBoxLayout()
         self.w["full_symbol"] = ck = QtWidgets.QCheckBox("full length")
         ck.setToolTip("473 frames per symbol (Variant A) = 164.8 s; a message is 30.2 min per pass. Untick for a short TEST symbol.")
-        ck.toggled.connect(lambda _b: self._symbol_changed())
+        ck.toggled.connect(lambda _b: (self._symbol_changed(), self._coherence()))
         symrow.addWidget(ck)
         symrow.addWidget(QtWidgets.QLabel("  test length:"))
         self.w["n_frames_test"] = sp = QtWidgets.QSpinBox()
@@ -918,12 +956,19 @@ class EveApp(QtWidgets.QMainWindow):
         f.addRow("RX gain", sp)
         self.w["clock"] = cb = QtWidgets.QComboBox()
         cb.addItems(["external", "gpsdo", "internal"])
-        cb.setToolTip("external = the station GPS clock on REF IN and PPS IN (7.1); internal = bench only, no lock check")
+        cb.setToolTip("external = 10 MHz on REF IN and 1 PPS on PPS IN from the station reference, whichever it is "
+                      "(GPS clock, HP5065A rubidium plus a PPS source); gpsdo = an Ettus GPSDO board inside the B210; "
+                      "internal = the B210's TCXO, bench only, no lock check")
+        cb.currentTextChanged.connect(lambda _t: self._reference_changed())
         f.addRow("Clock source", cb)
+        sub = QtWidgets.QHBoxLayout()
+        sub.addSpacing(24)
+        self.w["gpsdo"] = ck = QtWidgets.QCheckBox("the external reference is the Leo Bodnar GPS clock on USB: program and check it first")
+        ck.setToolTip(TIPS["gpsdo_sub"])
+        sub.addWidget(ck, 1)
+        f.addRow("", sub)
         self.w["time_host"] = ck = QtWidgets.QCheckBox("host-timed (no PPS available: epoch from the PC's NTP clock)")
         f.addRow("Time", ck)
-        self.w["gpsdo"] = ck = QtWidgets.QCheckBox("program and check the Leo Bodnar GPS clock first (OUT1 10 MHz, OUT2 off = 1 PPS)")
-        f.addRow("GPS clock", ck)
         self.w["lo_offset_khz"] = sp = QtWidgets.QDoubleSpinBox()
         sp.setRange(-2000.0, 2000.0)
         sp.setSuffix(" kHz")
@@ -981,6 +1026,7 @@ class EveApp(QtWidgets.QMainWindow):
         f = QtWidgets.QFormLayout(gb)
         self.w["interop_dir"] = cb = QtWidgets.QComboBox()
         cb.addItems(["Transmit only (the partner receives)", "Receive only (the partner transmits)"])
+        cb.currentTextChanged.connect(lambda _t: self._coherence())
         f.addRow("Direction", cb)
         self.w["interop_chunk_s"] = sp = QtWidgets.QDoubleSpinBox()
         sp.setRange(10.0, 3600.0)
@@ -1136,6 +1182,7 @@ class EveApp(QtWidgets.QMainWindow):
 
     # ---- settings <-> form -------------------------------------------------------------
     def _load(self) -> None:
+        self._loading = True
         s = self.settings
         mode = s.get("mode")
         for b in self.mode_group.buttons():
@@ -1158,6 +1205,7 @@ class EveApp(QtWidgets.QMainWindow):
                 wd.setDateTime(dt.toUTC())
             elif isinstance(wd, QtWidgets.QLineEdit):
                 wd.setText(str(v))
+        self._loading = False
         self._symbol_changed()
 
     def _values(self) -> Dict:
@@ -1191,7 +1239,105 @@ class EveApp(QtWidgets.QMainWindow):
         b = self.mode_group.checkedButton()
         return b.property("mode") if b is not None else "bench"
 
-    def _mode_changed(self) -> None:
+    def _reference_changed(self) -> None:
+        ext = self.w["clock"].currentText() == "external" and self.mode() != "sim"
+        self.w["gpsdo"].setEnabled(ext)
+
+    def _apply_values(self, d: Dict) -> None:
+        for key, v in d.items():
+            wd = self.w.get(key)
+            if wd is None:
+                continue
+            if isinstance(wd, QtWidgets.QCheckBox):
+                wd.setChecked(bool(v))
+            elif isinstance(wd, QtWidgets.QComboBox):
+                i = wd.findText(str(v))
+                if i >= 0:
+                    wd.setCurrentIndex(i)
+            elif isinstance(wd, QtWidgets.QDoubleSpinBox):
+                wd.setValue(float(v))
+            elif isinstance(wd, QtWidgets.QSpinBox):
+                wd.setValue(int(v))
+            elif isinstance(wd, QtWidgets.QLineEdit):
+                wd.setText(str(v))
+
+    def _set_defaults(self) -> None:
+        m = self.mode()
+        d = dict(COMMON_DEFAULTS)
+        d.update(MODE_DEFAULTS[m])
+        before = self._values()
+        self._apply_values(d)
+        changed = [k for k in d if before.get(k) != self._values().get(k)]
+        self._coherence()
+        msg = f"defaults for {m}: " + (", ".join(changed) if changed else "nothing to change")
+        self.lbl_coherence.setText(msg)
+        self.status.setText(msg)
+        self._log(msg)
+
+    def _coherence(self) -> List[str]:
+        if getattr(self, "_loading", False) or getattr(self, "_in_coherence", False):
+            return []          # not while loading, and not re-entered from a setter it just called
+        self._in_coherence = True
+        try:
+            return self._coherence_rules()
+        finally:
+            self._in_coherence = False
+
+    def _coherence_rules(self) -> List[str]:
+        """Rules that keep the settings consistent with the run mode and the variant; applied
+        after a mode, variant, symbol-length, or interop-direction change. Returns notes."""
+        m = self.mode()
+        notes: List[str] = []
+        v = self.w["variant"].currentText()
+        p = EveParams.named(v)
+        # chunks must hold the pilot plus data (bench, sim, interop use the bench chunk)
+        if self.w["pilot"].isChecked():
+            need_s = (int(self.w["pilot_frames_test"].value()) + 2) / p.r_bw if not self.w["full_symbol"].isChecked() else (p.pilot_frames + 2) / p.r_bw
+            for key in (("bench_chunk_s",) if m in ("bench", "sim") else ("interop_chunk_s",) if m == "interop" else ()):
+                if self.w[key].value() < need_s:
+                    self.w[key].setValue(math.ceil(need_s * 10 - 1e-9) / 10.0)
+                    notes.append(f"chunk raised to {self.w[key].value():.1f} s (Variant {v}: {p.t_frame:.3f} s frames, pilot + 2)")
+        if m in ("eme", "eve", "interop"):
+            if not self.w["full_symbol"].isChecked():
+                self.w["full_symbol"].setChecked(True)
+                notes.append("full-length symbols (the air interface)")
+            if self.w["clock"].currentText() == "internal":
+                self.w["clock"].setCurrentText("external")
+                notes.append("clock source external (no internal reference on the air)")
+        if m == "eve":
+            if abs(self.w["f_dial_mhz"].value() - 1296.0) < 1e-6:
+                self.w["f_dial_mhz"].setValue(1299.5)
+                notes.append("dial 1299.5 MHz (Venus 2026 with the 23 cm package)")
+            if not self.w["sky_pa"].isChecked():
+                self.w["sky_pa"].setChecked(True)
+                notes.append("amplifier limits on")
+            if self.w["repeat"].value() < 2:
+                self.w["repeat"].setValue(5)
+                notes.append("repeat 5")
+        if m == "bench" and self.w["tx_gain"].value() > 20.0:
+            self.w["tx_gain"].setValue(0.0)
+            notes.append("TX gain 0 dB (loopback needs none)")
+        if m == "interop":
+            rx_only = self.w["interop_dir"].currentText().startswith("Receive")
+            if rx_only and self.w["pilot"].isChecked():
+                self.w["pilot"].setChecked(False)
+                notes.append("pilot off (ORI's generator sends none)")
+            if not rx_only and not self.w["pilot"].isChecked():
+                self.w["pilot"].setChecked(True)
+                notes.append("pilot on")
+        if m == "sim" and self.w["sim_range_km"].value() < 100.0 and self.w["bench_chunk_s"].value() < 1.0:
+            self.w["bench_chunk_s"].setValue(2.4)
+            notes.append("chunk 2.4 s")
+        self._reference_changed()
+        self._symbol_changed()
+        if notes:
+            msg = "adjusted for " + m + ": " + "; ".join(notes)
+            self.lbl_coherence.setText(msg)
+            self.status.setText(msg)
+            self._log(msg)
+        return notes
+
+    def _mode_changed(self, user: bool = False) -> None:
         m = self.mode()
         self.mode_stack.setCurrentIndex([k for k, _ in MODES].index(m))
         self.sky_box.setVisible(m in ("eme", "eve", "interop"))
@@ -1201,6 +1347,11 @@ class EveApp(QtWidgets.QMainWindow):
         for key in ("serial", "tx_gain", "rx_gain", "clock", "time_host", "gpsdo", "lo_offset_khz"):
             self.w[key].setEnabled(radio)
         self._symbol_changed()
+        self._reference_changed()
+        if user:
+            self._coherence()
+        else:
+            self.lbl_coherence.setText("")
 
     def _symbol_changed(self) -> None:
         v = self.w["variant"].currentText()
