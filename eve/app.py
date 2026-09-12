@@ -35,14 +35,15 @@ from .params import EveParams
 from . import doppler as D
 from . import schedule as S
 from .doppler import iso_utc
-from .display import OperatorPanel, NAVY, TEAL, MONO
+from .display import OperatorPanel, NAVY, TEAL, MONO, ABORT_STYLE, wrap_tooltips
 
 MODES = [("sim", "Software simulation (no radio)"),
          ("bench", "Bench loopback (one B210, no antenna)"),
+         ("interop", "Interop with a partner station (ORI): transmit only or receive only"),
          ("eme", "EME — Earth-Moon-Earth"),
          ("eve", "EVE — Earth-Venus-Earth")]
-PREFIX = {"sim": "SIM", "bench": "BENCH", "eme": "EME", "eve": "EVE"}
-TARGET = {"sim": "sim", "bench": "bench", "eme": "moon", "eve": "venus"}
+PREFIX = {"sim": "SIM", "bench": "BENCH", "interop": "INTEROP", "eme": "EME", "eve": "EVE"}
+TARGET = {"sim": "sim", "bench": "bench", "interop": "partner", "eme": "moon", "eve": "venus"}
 FULL_FRAMES = {"A": 473, "B": 247, "MATLAB": 540}
 
 
@@ -133,6 +134,16 @@ TIPS: Dict[str, str] = {
                   "by 10 Hz at 13 cm, so Horizons is primary (design 4.3). The table used is saved with the run.",
     "sky_precomp": "Monostatic: shift the transmit tones by minus the predicted two-way Doppler so our own echo "
                    "lands on the nominal comb. Untick only when transmitting for a partner that does its own removal.",
+    "mode:interop": "Compatibility test with ORI's own hardware and software, on the bench (cable and attenuator) "
+                    "or across the room. Transmit only: we send the agreed message at the agreed UTC time and the "
+                    "partner's receiver decodes it. Receive only: the partner transmits (their generator has no pilot: "
+                    "untick Pilot) and we archive and decode, searching for their start within the search range. No "
+                    "Doppler, no round trip, no amplifier limits.",
+    "interop_dir": "Which end we are. Transmit only keys nothing unless a sequencer is wired; receive only sends no RF at all.",
+    "interop_chunk_s": "Length of each contiguous transmit/receive block. Blocks follow each other with no gap, so the "
+                       "signal is continuous; the block only sets the archive file size (about 24 MB per 300 s).",
+    "interop_search_frames": "Receive only: how far (in frames of 0.35 s) the partner's actual start may differ from "
+                             "the agreed time. The decoder searches this range; 30 frames = +/-10 s. Larger costs time.",
     "sky_rx_doppler": "Remove the model Doppler on receive. Needed when this receiver is NOT the one the transmit was "
                       "pre-compensated for (receiving a partner's transmission).",
 }
@@ -154,6 +165,7 @@ class Settings:
         "sky_pa": True, "sky_t_on_max": 300.0, "sky_t_off_min": 240.0, "sky_rtt_guard": 30.0,
         "sky_source": "auto", "sky_rx_doppler": False, "sky_precomp": True,
         "eme_chunk_s": 2.4, "eme_pa": False, "eme_t_off_min": 0.5, "eme_rtt_guard": 0.1, "eme_t_on_max": 300.0,
+        "interop_dir": "Transmit only (the partner receives)", "interop_chunk_s": 300.0, "interop_search_frames": 30,
         "report_zoom": 100,
     }
 
@@ -279,7 +291,7 @@ class RunController(QtCore.QObject):
 
             # start time and ephemeris
             lead = float(cfg["lead_s"])
-            if mode in ("eme", "eve") and not cfg["sky_start_now"]:
+            if mode in ("eme", "eve", "interop") and not cfg["sky_start_now"]:
                 t_start = D.to_unix(cfg["sky_start_utc"])
                 if t_start < now + 12.0:
                     raise RuntimeError(f"start {iso_utc(t_start, 0)} is in the past or too close; use 'start now' or a later time")
@@ -292,6 +304,10 @@ class RunController(QtCore.QObject):
                 table_name = ""
             elif mode == "bench":
                 tab = D.synthetic_table("bench", site, now - 60, now + 8 * 3600, range_km=float(cfg["bench_range_km"]))
+                model = D.DopplerModel(tab)
+                table_name = ""
+            elif mode == "interop":
+                tab = D.synthetic_table("partner", site, now - 60, now + 8 * 3600, range_km=0.001)
                 model = D.DopplerModel(tab)
                 table_name = ""
             else:
@@ -327,6 +343,15 @@ class RunController(QtCore.QObject):
                                          rtt_guard_s=0.0, t_off_min_s=float(cfg["bench_t_off_min"]), t_on_max_s=3600.0,
                                          mode="bistatic_tx")
                 opts_kw = dict(pa_in_chain=False, tx_precompensate=False, rx_doppler_removal=False, start_margin_s=2.0)
+            elif mode == "interop":
+                rx_only = cfg["interop_dir"].startswith("Receive")
+                sched = S.build_schedule(sid, "partner", model, t_start, f_dial, params=p, text=cfg["message"],
+                                         repeat_count=int(cfg["repeat"]), pilot=cfg["pilot"],
+                                         chunk_s=float(cfg["interop_chunk_s"]), rtt_guard_s=0.0, t_off_min_s=0.0,
+                                         t_on_max_s=3600.0, mode="bistatic_rx" if rx_only else "bistatic_tx",
+                                         notes=("receive only: partner transmits" if rx_only else "transmit only: partner receives"))
+                opts_kw = dict(pa_in_chain=False, tx_precompensate=False, rx_doppler_removal=False,
+                               tx_enabled=not rx_only)
             elif mode == "eme":
                 sched = S.build_schedule(sid, "moon", model, t_start, f_dial, params=p, text=cfg["message"],
                                          repeat_count=int(cfg["repeat"]), pilot=cfg["pilot"], mode=cfg["sky_mode"],
@@ -373,7 +398,8 @@ class RunController(QtCore.QObject):
                     radio = None
             self._say(f"session finished: aborted={rep.aborted} {rep.abort_reason}; chunks keyed {rep.chunks_keyed}; "
                       f"frames sent {rep.frames_sent}; live decode {rep.live_decode}")
-            result = self._decode_and_report(archive, sched, extra={"GPS clock": gps_text} if gps_text else None)
+            search = int(cfg["interop_search_frames"]) if mode == "interop" and cfg["interop_dir"].startswith("Receive") else 0
+            result = self._decode_and_report(archive, sched, extra={"GPS clock": gps_text} if gps_text else None, search=search)
             result["aborted"] = rep.aborted
             self.finished.emit(result)
         except Exception as e:      # noqa: BLE001
@@ -390,14 +416,16 @@ class RunController(QtCore.QObject):
             self.busy = False
             self.state.emit("idle")
 
-    def _decode_and_report(self, archive: Path, sched, extra=None) -> Dict:
+    def _decode_and_report(self, archive: Path, sched, extra=None, search: int = 0) -> Dict:
         from .decode import decode_archive, summarize
         from .report import write_report
         self.state.emit("decoding")
         self._say("offline decode (decision of record) ...")
         summary, windows = None, []
         try:
-            acc, windows = decode_archive(archive, sched, log=self._say)
+            if search == 0 and sched.mode == "bistatic_rx":
+                search = 30
+            acc, windows = decode_archive(archive, sched, log=self._say, epoch_search_frames=search)
             summary = summarize(acc, sched)
             c = summary["combined"]
             self._say(f"OFFLINE DECODE: {'OK' if c['ok'] else 'FAIL'} '{c['text']}' symbols {c['symbols']} expected {c['expected']}; "
@@ -442,10 +470,12 @@ class ReportView(QtWidgets.QWidget):
         self.archive = Path(settings.get("archive"))
         self.current: Optional[Path] = None
         lay = QtWidgets.QHBoxLayout(self)
-        left = QtWidgets.QVBoxLayout()
+        left_w = QtWidgets.QWidget()
+        left = QtWidgets.QVBoxLayout(left_w)
+        left.setContentsMargins(0, 0, 0, 0)
         left.addWidget(QtWidgets.QLabel("Session reports in the archive folder (newest first)"))
         self.list = QtWidgets.QListWidget()
-        self.list.setMaximumWidth(330)
+        self.list.setMinimumWidth(200)
         self.list.currentItemChanged.connect(self._pick)
         self.list.setToolTip("One entry per session report; click to view it. The session id is the mode and the UTC start.")
         left.addWidget(self.list, 1)
@@ -480,14 +510,19 @@ class ReportView(QtWidgets.QWidget):
         zrow.addWidget(self.zoom)
         zrow.addStretch(1)
         left.addLayout(zrow)
-        lay.addLayout(left)
         self.scroll = QtWidgets.QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.pages = QtWidgets.QWidget()
         self.pages_lay = QtWidgets.QVBoxLayout(self.pages)
         self.pages_lay.setAlignment(QtCore.Qt.AlignHCenter | QtCore.Qt.AlignTop)
         self.scroll.setWidget(self.pages)
-        lay.addWidget(self.scroll, 1)
+        self.split = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        self.split.addWidget(left_w)
+        self.split.addWidget(self.scroll)
+        self.split.setStretchFactor(0, 1)
+        self.split.setStretchFactor(1, 4)
+        self.split.setSizes([330, 960])
+        lay.addWidget(self.split)
         self.refresh()
 
     def set_archive(self, folder: str) -> None:
@@ -658,6 +693,15 @@ class EveApp(QtWidgets.QMainWindow):
         self._help_dlg = None
         self._load()
         self._mode_changed()
+        wrap_tooltips(self)
+        for name in ("setup_split",):
+            st = self.settings.q.value(name)
+            if st is not None:
+                getattr(self, name).restoreState(st)
+        for name, obj in (("report_split", self.report.split), ("run_hsplit", self.panel.hsplit), ("run_vsplit", self.panel.vsplit)):
+            st = self.settings.q.value(name)
+            if st is not None:
+                obj.restoreState(st)
         geo = self.settings.q.value("geometry")
         if geo is not None:
             self.restoreGeometry(geo)
@@ -668,10 +712,24 @@ class EveApp(QtWidgets.QMainWindow):
     def _build_setup(self) -> QtWidgets.QWidget:
         w = QtWidgets.QWidget()
         outer = QtWidgets.QHBoxLayout(w)
-        left = QtWidgets.QVBoxLayout()
-        outer.addLayout(left, 3)
-        right = QtWidgets.QVBoxLayout()
-        outer.addLayout(right, 2)
+        outer.setContentsMargins(4, 4, 4, 4)
+        left_w = QtWidgets.QWidget()
+        left = QtWidgets.QVBoxLayout(left_w)
+        left.setContentsMargins(0, 0, 0, 0)
+        left_scroll = QtWidgets.QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        left_scroll.setWidget(left_w)
+        right_w = QtWidgets.QWidget()
+        right = QtWidgets.QVBoxLayout(right_w)
+        right.setContentsMargins(0, 0, 0, 0)
+        self.setup_split = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        self.setup_split.addWidget(left_scroll)
+        self.setup_split.addWidget(right_w)
+        self.setup_split.setStretchFactor(0, 3)
+        self.setup_split.setStretchFactor(1, 2)
+        self.setup_split.setSizes([780, 520])
+        outer.addWidget(self.setup_split)
 
         # mode
         gb = QtWidgets.QGroupBox("Run mode")
@@ -808,6 +866,26 @@ class EveApp(QtWidgets.QMainWindow):
         sp.setSuffix(" s")
         f.addRow("Minimum off time", sp)
         self.mode_stack.addWidget(gb)
+        # interop
+        gb = QtWidgets.QGroupBox("Interop with a partner station")
+        f = QtWidgets.QFormLayout(gb)
+        self.w["interop_dir"] = cb = QtWidgets.QComboBox()
+        cb.addItems(["Transmit only (the partner receives)", "Receive only (the partner transmits)"])
+        f.addRow("Direction", cb)
+        self.w["interop_chunk_s"] = sp = QtWidgets.QDoubleSpinBox()
+        sp.setRange(10.0, 3600.0)
+        sp.setSuffix(" s")
+        f.addRow("Block length", sp)
+        self.w["interop_search_frames"] = sp = QtWidgets.QSpinBox()
+        sp.setRange(0, 600)
+        sp.setSuffix(" frames")
+        f.addRow("Start search range", sp)
+        lbl = QtWidgets.QLabel("Both ends use Variant A, full-length symbols, the same dial frequency, the same message, "
+                               "and the same UTC start (below). The ORI generator sends no pilot: untick Pilot when receiving from it.")
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet(f"color: {TEAL};")
+        f.addRow("", lbl)
+        self.mode_stack.addWidget(gb)
         # eme
         gb = QtWidgets.QGroupBox("EME (Moon)")
         f = QtWidgets.QFormLayout(gb)
@@ -907,7 +985,7 @@ class EveApp(QtWidgets.QMainWindow):
         self.btn_start.clicked.connect(self._start)
         brow.addWidget(self.btn_start)
         self.btn_abort = QtWidgets.QPushButton("ABORT")
-        self.btn_abort.setStyleSheet("background: #c0392b; color: white; font-weight: bold; padding: 8px; font-size: 14px;")
+        self.btn_abort.setStyleSheet(ABORT_STYLE + " QPushButton { padding: 8px; font-size: 14px; }")
         self.btn_abort.clicked.connect(lambda: self.ctl.abort("operator abort from the Setup tab"))
         self.btn_abort.setEnabled(False)
         brow.addWidget(self.btn_abort)
@@ -992,6 +1070,10 @@ class EveApp(QtWidgets.QMainWindow):
         for k, v in cfg.items():
             self.settings.set(k, v)
         self.settings.set("geometry", self.saveGeometry())
+        self.settings.set("setup_split", self.setup_split.saveState())
+        self.settings.set("report_split", self.report.split.saveState())
+        self.settings.set("run_hsplit", self.panel.hsplit.saveState())
+        self.settings.set("run_vsplit", self.panel.vsplit.saveState())
         self.settings.sync()
         self.status.setText(f"settings saved to {self.settings.path}")
 
@@ -1002,7 +1084,9 @@ class EveApp(QtWidgets.QMainWindow):
     def _mode_changed(self) -> None:
         m = self.mode()
         self.mode_stack.setCurrentIndex([k for k, _ in MODES].index(m))
-        self.sky_box.setVisible(m in ("eme", "eve"))
+        self.sky_box.setVisible(m in ("eme", "eve", "interop"))
+        for key in ("sky_mode", "sky_source", "sky_precomp", "sky_rx_doppler"):
+            self.w[key].setEnabled(m in ("eme", "eve"))
         radio = m != "sim"
         for key in ("serial", "tx_gain", "rx_gain", "clock", "time_host", "gpsdo", "lo_offset_khz"):
             self.w[key].setEnabled(radio)
@@ -1042,7 +1126,7 @@ class EveApp(QtWidgets.QMainWindow):
     def _start(self) -> None:
         self._save()
         cfg = self._values()
-        if cfg["mode"] in ("eme", "eve") and cfg["full_symbol"] is False:
+        if cfg["mode"] in ("eme", "eve", "interop") and cfg["full_symbol"] is False:
             r = QtWidgets.QMessageBox.question(self, "Test-length symbols on the air",
                                                "The symbol length is a TEST length, not the 473-frame air interface. "
                                                "A partner station could not decode this. Start anyway?")

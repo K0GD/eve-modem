@@ -20,8 +20,13 @@ from .schedule import Schedule
 
 def decode_archive(archive_dir, schedule: Schedule, use_pilot: bool = True, track: bool = True,
                    verbose: bool = True, max_windows: Optional[int] = None,
-                   log=None) -> Tuple[modem.SymbolAccumulator, List[Dict]]:
-    """Returns (accumulator, per-window results). Each result dict has the file name,
+                   log=None, epoch_search_frames: int = 0) -> Tuple[modem.SymbolAccumulator, List[Dict]]:
+    """epoch_search_frames > 0: the transmitter is a partner whose start may differ from
+    our nominal epoch by up to that many frames (interop tests). With a pilot the detector
+    searches that range in every window; without one the known message symbols are
+    matched over the range on the first window and the shift is applied to all.
+
+    Returns (accumulator, per-window results). Each result dict has the file name,
     sample count, seconds, first frame, frames filed, pilot detection (bool), frame shift,
     pilot frequency offset, contrast, residual frequency, gap events, and a `line` string."""
     p = schedule.params
@@ -34,6 +39,8 @@ def decode_archive(archive_dir, schedule: Schedule, use_pilot: bool = True, trac
         raise FileNotFoundError(f"no {schedule.session_id}_*.eve.iq files in {archive_dir}")
     results: List[Dict] = []
     say = log or (print if verbose else (lambda s: None))
+    detector = sync.PilotDetector(p, max_frames=max(3, epoch_search_frames)) if epoch_search_frames > 0 else None
+    known_shift: Optional[int] = None
     for f in files:
         side = json.loads(Path(str(f)[:-len(".eve.iq")] + ".json").read_text(encoding="utf-8"))
         x = np.fromfile(f, dtype=np.complex64)
@@ -48,7 +55,15 @@ def decode_archive(archive_dir, schedule: Schedule, use_pilot: bool = True, trac
         if frac > 0.5:
             x = x[int(round((1.0 - frac) * p.n_fft)):]
             k0 += 1
-        rx = sync.WindowReceiver(p, fm, acc, use_pilot=use_pilot, track=track)
+        if epoch_search_frames > 0 and not (use_pilot and fm.pilot):
+            if known_shift is None:
+                known_shift = _epoch_shift(x, k0, schedule, epoch_search_frames)
+                say(f"epoch search (known symbols, +/-{epoch_search_frames} frames): partner is {known_shift:+d} frames from our nominal")
+            if known_shift > 0:
+                x = x[known_shift * p.n_fft:]
+            elif known_shift < 0:
+                k0 += -known_shift
+        rx = sync.WindowReceiver(p, fm, acc, use_pilot=use_pilot, track=track, pilot_detector=detector)
         r = rx.process(x, k0, fs=fs)
         det = bool(r.sync and r.sync.detected)
         d = {"file": f.name, "samples": int(x.size), "seconds": float(x.size / fs), "frame_first": int(k0),
@@ -57,6 +72,7 @@ def decode_archive(archive_dir, schedule: Schedule, use_pilot: bool = True, trac
              "f_offset_hz": float(r.sync.f_offset_hz) if r.sync else 0.0,
              "contrast": float(r.sync.contrast) if r.sync else 0.0,
              "f_residual_hz": float(r.f_residual_hz), "gap_events": int(side.get("gap_events", 0)),
+             "epoch_shift": int(known_shift or 0),
              "gap_samples": int(side.get("gap_samples", 0))}
         d["line"] = (f"{f.name}: {x.size} samples ({x.size / fs:.1f} s), frames {k0}.. filed {r.frames_filed}, "
                      f"pilot {'det' if det else 'none'}"
@@ -81,3 +97,30 @@ def summarize(acc: modem.SymbolAccumulator, schedule: Schedule) -> Dict:
                        "bch_ok": bool(getattr(o, "bch_ok", o.ok)), "crc_ok": bool(getattr(o, "crc_ok", o.ok)),
                        "margins_db": [float(m) for m in acc.margin_db()]}
     return out
+
+
+def _epoch_shift(x: np.ndarray, k_first: int, schedule: Schedule, n: int) -> int:
+    """Whole-frame shift of a partner's transmission relative to our nominal epoch, by
+    matching the known message symbols over -n..+n frames (positive = the partner started
+    late: their frame k_first begins `shift` frames into our window)."""
+    p = schedule.params
+    fm = schedule.frame_map()
+    bank = modem.FrameBank(p)
+    best, best_s = 0, -np.inf
+    span = min(len(x), (p.n_sym * p.n_frames + p.pilot_frames + 2 * n) * p.n_fft)
+    for shift in range(-n, n + 1):
+        acc = modem.SymbolAccumulator(p, fm)
+        if shift >= 0:
+            seg = x[shift * p.n_fft:span]
+            k0 = k_first
+        else:
+            seg = x[:span]
+            k0 = k_first - shift
+        if len(seg) < p.n_fft:
+            continue
+        acc.add_block(k0, bank.frames_metric(seg))
+        c = acc.combined()
+        s = float(sum(c[m, d] for m, d in enumerate(schedule.symbols) if c[m].any()))
+        if s > best_s:
+            best, best_s = shift, s
+    return best

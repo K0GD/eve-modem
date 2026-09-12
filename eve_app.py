@@ -15,6 +15,14 @@ os.environ["PYQTGRAPH_QT_LIB"] = "PySide6"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import faulthandler  # noqa: E402
+
+# A hard crash (access violation in a native library) leaves its traceback here.
+_logdir = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "DSES", "EVE_Modem")
+os.makedirs(_logdir, exist_ok=True)
+_fault = open(os.path.join(_logdir, "fault.log"), "a")
+faulthandler.enable(file=_fault, all_threads=True)
+
 from eve.app import main  # noqa: E402
 
 if __name__ == "__main__":

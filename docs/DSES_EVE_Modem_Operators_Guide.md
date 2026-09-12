@@ -67,6 +67,7 @@ Every control has a tooltip: hover over it or its label. The essentials:
 |---|---|
 | Software simulation | No radio. Proves the decoder and the display at a chosen signal-to-noise. Run it first on any new PC. |
 | Bench loopback | One B210, nothing on the antenna ports. Transmits at low gain, receives its own internal leakage. Proves the radio, the reference, the archive, and the decoder before anything goes on the air. |
+| Interop with a partner station | Compatibility test with ORI's own hardware and software, on the bench through a cable and attenuator or across the room: transmit only (their receiver decodes us) or receive only (their generator transmits, we archive and decode). No Doppler, no round trip, no amplifier limits. See section 7.1. |
 | EME | Moon bounce. Ephemeris from JPL Horizons, Doppler pre-compensated, transmit 2.4 s then listen for the 2.5 s echo, repeat. The rehearsal before Venus. |
 | EVE | Venus bounce. 240 s transmit chunks against the 272 s round trip. A full message is 30.2 minutes per pass; plan five passes. |
 
@@ -168,6 +169,25 @@ synchronization (pilot offset, tracker residual, sample gaps), and the key-event
 After every run, read the report before deciding the next step. Keep the archive folder;
 the raw windows can be decoded again later.
 
+## 7.1 The interop test with ORI
+
+Both ends agree on four things beforehand: Variant A with full-length symbols, the dial
+frequency, the message (K0PRT K0PRT), and the UTC start of the transmission. In the
+program choose **Interop with a partner station**, tick **full length**, and set the start
+either as "now + lead" (tell the partner the time the preview shows) or as the agreed UTC
+time.
+
+- **Transmit only**: we send the message; the partner's receiver decodes it. Their
+  result is the test result. Our report shows what left the radio.
+- **Receive only**: the partner transmits from their generator, which has no pilot:
+  **untick Pilot**. We send no RF and key nothing. After the run the decoder searches for
+  their actual start within the **start search range** (30 frames = ±10 s around the
+  agreed time; widen it if their start is looser) and the report says by how many frames
+  they were off and whether the message decoded.
+
+Cable and attenuator: the B210 puts out up to +8 dBm, and its receiver wants no more than
+about −20 dBm at RX2, so 30 to 40 dB of attenuation between two radios on the bench.
+
 # 8. When something is wrong
 
 <!-- widths: 2.3,4.4 -->
@@ -183,6 +203,7 @@ the raw windows can be decoded again later.
 | Decisions wrong on the bench | Reference unlocked (frequency off), or the LO offset fell back (the radio line says so). Do not go on the air until the bench decodes. |
 | "chunk would hold no frames" | The chunk settings leave no room between the round trip and the guard. Restore the mode's defaults. |
 | Horizons unreachable | The ephemeris source falls back to astropy with the local DE440s. The Doppler differs by up to 10 Hz at 13 cm; acceptable, but note it in the log. |
+| The program closes by itself | A native library crashed. Two files under `%LOCALAPPDATA%\DSES\EVE_Modem` tell the story: `app.log` (everything the program printed) and `fault.log` (the traceback of a hard crash). Send both. If the B210 was left streaming by a program that was killed, power-cycle it (USB and DC off for 15 s) before the next try. |
 | The program will not start from the icon | Read `%LOCALAPPDATA%\DSES\EVE_Modem\app.log`. The project environment must exist in `.conda` next to the program. |
 
 # 9. Files a run produces

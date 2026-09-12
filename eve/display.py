@@ -35,6 +35,23 @@ TEAL, NAVY, GOLD = "#156082", "#0A2F40", "#B86A18"
 STRIP_ROWS = 300            # frames kept in the tone strip (~105 s of Variant A)
 STRIP_COLS = 512            # candidate bins collapsed 8:1 for display
 MONO = "font-family: 'Source Code Pro', Consolas, monospace;"
+ABORT_STYLE = ("QPushButton { background: #c0392b; color: white; font-weight: bold; padding: 6px; }"
+               "QPushButton:disabled { background: #6e2f28; color: #c8b8b6; }")
+
+
+def wrap_tooltips(root) -> None:
+    """Qt shows plain-text tooltips on one line however long; rich text wraps. Convert
+    every plain tooltip under `root` (and root's own) to wrapped rich text."""
+    import html
+    widgets = [root] + root.findChildren(QtWidgets.QWidget)
+    for w in widgets:
+        t = w.toolTip()
+        if t and not t.lstrip().startswith("<"):
+            w.setToolTip("<qt><p style='white-space:normal'>" + html.escape(t) + "</p></qt>")
+    for a in root.findChildren(QtGui.QAction):
+        t = a.toolTip()
+        if t and not t.lstrip().startswith("<"):
+            a.setToolTip("<qt><p style='white-space:normal'>" + html.escape(t) + "</p></qt>")
 
 
 class OperatorPanel(QtWidgets.QWidget):
@@ -71,8 +88,8 @@ class OperatorPanel(QtWidgets.QWidget):
 
     # ---- layout -----------------------------------------------------------------------------
     def _build(self):
-        grid = QtWidgets.QGridLayout(self)
-        grid.setContentsMargins(8, 8, 8, 8)
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(8, 8, 8, 8)
 
         # header: session + phase + clocks
         self.lbl_title = QtWidgets.QLabel()
@@ -85,9 +102,9 @@ class OperatorPanel(QtWidgets.QWidget):
         hdr.addWidget(self.lbl_title, 1)
         hdr.addWidget(self.lbl_phase)
         hdr.addWidget(self.lbl_clock)
-        grid.addLayout(hdr, 0, 0, 1, 2)
+        outer.addLayout(hdr)
 
-        # tone strip + current frame spectrum
+        # tone strip + current frame spectrum (left)
         strip_box = QtWidgets.QGroupBox("Tone strip (frames x candidate bins, newest at top). 4096-ary FSK sends ONE tone per frame: "
                                         "one dot per row is the whole signal")
         vb = QtWidgets.QVBoxLayout(strip_box)
@@ -112,9 +129,11 @@ class OperatorPanel(QtWidgets.QWidget):
         self.spec_plot.addItem(self.spec_expected)
         self.spec_plot.addItem(self.spec_decided)
         vb.addWidget(self.spec_plot, 2)
-        grid.addWidget(strip_box, 1, 0, 3, 1)
 
-        # decisions
+        # right column: decisions, schedule, radio
+        right = QtWidgets.QWidget()
+        rv_all = QtWidgets.QVBoxLayout(right)
+        rv_all.setContentsMargins(0, 0, 0, 0)
         dec_box = QtWidgets.QGroupBox("Running decisions (live accumulator; the offline decode is the decision of record)")
         dv = QtWidgets.QVBoxLayout(dec_box)
         self.table = QtWidgets.QTableWidget(0, 6)
@@ -127,9 +146,8 @@ class OperatorPanel(QtWidgets.QWidget):
         self.lbl_decode.setWordWrap(True)
         self.lbl_decode.setStyleSheet(MONO)
         dv.addWidget(self.lbl_decode)
-        grid.addWidget(dec_box, 1, 1)
+        rv_all.addWidget(dec_box, 3)
 
-        # schedule / chunk state
         sch_box = QtWidgets.QGroupBox("Schedule")
         sv = QtWidgets.QVBoxLayout(sch_box)
         self.lbl_sched = QtWidgets.QLabel()
@@ -140,9 +158,8 @@ class OperatorPanel(QtWidgets.QWidget):
         self.key_lamp.setAlignment(QtCore.Qt.AlignCenter)
         self._lamp(False)
         sv.addWidget(self.key_lamp)
-        grid.addWidget(sch_box, 2, 1)
+        rv_all.addWidget(sch_box, 1)
 
-        # radio + ephemeris + abort
         rad_box = QtWidgets.QGroupBox("Radio and ephemeris")
         rv = QtWidgets.QVBoxLayout(rad_box)
         self.lbl_radio = QtWidgets.QLabel()
@@ -153,22 +170,32 @@ class OperatorPanel(QtWidgets.QWidget):
         self.lbl_eph.setStyleSheet(MONO + " font-size: 11px;")
         rv.addWidget(self.lbl_eph)
         self.btn_abort = QtWidgets.QPushButton("ABORT — release key, stop")
-        self.btn_abort.setStyleSheet("background: #c0392b; color: white; font-weight: bold; padding: 6px;")
+        self.btn_abort.setStyleSheet(ABORT_STYLE)
+        self.btn_abort.setEnabled(False)
         self.btn_abort.clicked.connect(self._abort_clicked)
         rv.addWidget(self.btn_abort)
-        grid.addWidget(rad_box, 3, 1)
+        rv_all.addWidget(rad_box, 1)
 
-        # log
+        self.hsplit = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        self.hsplit.addWidget(strip_box)
+        self.hsplit.addWidget(right)
+        self.hsplit.setStretchFactor(0, 3)
+        self.hsplit.setStretchFactor(1, 2)
+        self.hsplit.setSizes([760, 500])
+
+        # log below, in a vertical splitter
         self.log = QtWidgets.QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(2000)
         self.log.setStyleSheet(MONO + " font-size: 11px;")
-        grid.addWidget(self.log, 4, 0, 1, 2)
-        grid.setRowStretch(1, 3)
-        grid.setRowStretch(4, 1)
-        grid.setColumnStretch(0, 3)
-        grid.setColumnStretch(1, 2)
         self.log.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
+        self.vsplit = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        self.vsplit.addWidget(self.hsplit)
+        self.vsplit.addWidget(self.log)
+        self.vsplit.setStretchFactor(0, 4)
+        self.vsplit.setStretchFactor(1, 1)
+        self.vsplit.setSizes([620, 160])
+        outer.addWidget(self.vsplit, 1)
         # operator help
         strip_box.setToolTip("Each row is one frame (0.35 s); each column a candidate tone (4096 collapsed to 512). "
                              "The waveform sends ONE tone per frame, so a healthy signal is a single bright dot per "
@@ -192,10 +219,12 @@ class OperatorPanel(QtWidgets.QWidget):
                            "offset health, PPS time-set error; the GPS clock's lock and signal-loss count; the target's "
                            "azimuth, elevation, round trip, Doppler and Doppler rate from the ephemeris.")
         self.btn_abort.setToolTip("Release the key line immediately, stop the streams, close the archive, write the log. "
-                                  "Use it for any fault: reference unlock, amplifier trouble, wrong pointing.")
+                                  "Use it for any fault: reference unlock, amplifier trouble, wrong pointing. Dim = no "
+                                  "session running.")
         self.log.setToolTip("The session log: controller steps, keying events, radio messages, decode results.")
         self.lbl_phase.setToolTip("Session phase: idle, preparing, armed, TX chunk n, listening, draining, finished, aborted.")
         self.lbl_clock.setToolTip("PC clock (UTC) and the B210's device time; they agree to milliseconds when the time was set on a PPS.")
+        wrap_tooltips(self)
 
     def _abort_clicked(self):
         if self.session is not None:
@@ -250,6 +279,7 @@ class OperatorPanel(QtWidgets.QWidget):
                                f"{self.p.n_frames} frames/symbol ({self.p.t_sym:.1f} s)")
         session.listeners.append(self._on_frame)
         session.log = self.append_log
+        self.btn_abort.setEnabled(True)
         self._refresh_radio()
 
     def unbind(self):
@@ -261,6 +291,7 @@ class OperatorPanel(QtWidgets.QWidget):
         self.session = None
         self.radio = None
         self.model = None
+        self.btn_abort.setEnabled(False)
 
     # ---- data in ------------------------------------------------------------------------------
     def _on_frame(self, k: int, x: np.ndarray, metric: np.ndarray):
@@ -362,6 +393,7 @@ class OperatorPanel(QtWidgets.QWidget):
             now = time.time()
         self.lbl_clock.setText(f"UTC {iso_utc(time.time(), 0)[11:19]}   device {iso_utc(now, 0)[11:19]}")
         self.lbl_phase.setText(self.session.phase)
+        self.btn_abort.setEnabled(self.session.phase not in ("finished", "aborted"))
         self._lamp(bool(getattr(self.radio, "keyed", False)))
         lines = []
         cur = None

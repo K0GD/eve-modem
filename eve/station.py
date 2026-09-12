@@ -52,6 +52,7 @@ class SessionOptions:
                                         # streamers took 3.8 s on the Windows bench (2026-09-11), and a late timed
                                         # command drops the whole TX stream ('L' storm) and the RX start (LATE_COMMAND)
     realtime_mode: bool = True
+    tx_enabled: bool = True             # False = receive only (a partner transmits): no RF, no keying
 
 
 class SimRadio:
@@ -176,6 +177,9 @@ class Session:
 
     # ---- keyer ---------------------------------------------------------------------------------
     def _keyer(self) -> None:
+        if not self.opts.tx_enabled:
+            self.phase = "receive only (partner transmits)"
+            return
         for c in self.sched.chunks:
             t_on = c.tx_start - self.opts.t_lead_s
             t_off = c.tx_stop + self.opts.t_lag_s
@@ -253,8 +257,11 @@ class Session:
         if sim:
             rtt = self.model.rtt_s(s.t_start) if self.model is not None else 0.0
             rx_in = self.radio.build_channel(tb, self.tone, rtt)
-        else:
+        elif opts.tx_enabled:
             tb.connect(self.tone, self.radio.tx)
+            rx_in = self.radio.rx.block
+        else:
+            tb.connect(self.tone, blocks.null_sink(gr.sizeof_gr_complex))   # keeps the frame clock, sends nothing
             rx_in = self.radio.rx.block
             from gnuradio import uhd
             self.radio.rx.block.set_start_time(uhd.time_spec(t0))
