@@ -168,7 +168,7 @@ def fig_blocks():
     box(28, 55, 26, 7, "schedule.json\nepoch, chunks, symbols,\nrepeat, pilot, Doppler model",
         fc="#E8F0F4", bold=True)
     box(58, 55, 18, 7, "ephemeris\nHorizons CSV /\nastropy DE440s", fs=6.8)
-    box(80, 55, 18, 7, "GPS 10 MHz + 1 PPS\n(station GPSDO)", fs=6.8)
+    box(80, 55, 18, 7, "GPS clock 10 MHz + 1 PPS\n(Leo Bodnar, USB)", fs=6.8)
     arrow(24, 58.5, 28, 58.5); arrow(58, 58.5, 54, 58.5)
     # middle row: radio and transmit chain
     box(2, 40, 22, 8, "TX NCO source\nradio rate, phase-continuous,\nIF offset, chunk gating,\n"
@@ -176,7 +176,7 @@ def fig_blocks():
     box(30, 40, 16, 8, "USRP B210\nTX/RX A  ->\nRX2 A  <-\nGPIO key", fc="#FFF4E8", ec=VERM,
         bold=True, fs=6.8)
     box(52, 40, 14, 8, "2 W driver\n+ 1200 W SSPA\n+ sequencer", fs=6.8)
-    box(72, 40, 12, 8, "feed\n2304 MHz", fs=6.8)
+    box(72, 40, 12, 8, "feed\n1299.5 MHz", fs=6.8)
     box(88, 42, 10, 4, "Venus", fc="#EEF5EE", ec=TEAL, bold=True)
     arrow(30, 55, 13, 48)                       # schedule -> TX NCO source
     arrow(24, 45, 30, 45)                       # TX samples -> B210

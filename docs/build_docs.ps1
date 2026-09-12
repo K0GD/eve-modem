@@ -10,7 +10,10 @@ $py   = Join-Path $wb '.conda\python.exe'
 $gen  = Join-Path $wb 'build_doc.py'
 $logo = Join-Path $wb 'reports\assets\DSES_Logo_Compact_Teal.png'
 
-python (Join-Path $here 'make_figures.py')
+# Figures need astropy: use this repo's env (its Library\bin must be on PATH for numpy's MKL).
+$eve = Join-Path $here '..\.conda'
+$env:PATH = (Join-Path $eve 'Library\bin') + ';' + $env:PATH
+& (Join-Path $eve 'python.exe') (Join-Path $here 'make_figures.py')
 
 & $py $gen (Join-Path $here 'DSES_EVE_Modem_Design_and_ICD.md') `
     --pdf   (Join-Path $here 'DSES_EVE_Modem_Design_and_ICD.pdf') `
