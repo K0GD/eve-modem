@@ -29,8 +29,7 @@ from eve import schedule as S  # noqa: E402
 from eve.station import Session, SessionOptions  # noqa: E402
 from eve.radio import EveRadio, RadioConfig  # noqa: E402
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from eve_decode import decode_archive  # noqa: E402
+from eve.decode import decode_archive  # noqa: E402
 
 
 def main(argv=None):

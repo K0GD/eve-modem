@@ -12,6 +12,16 @@ frames), while the Workbench is a receive-side observing tool that locks its
 transmitter at minimum. The two share code by factoring the Workbench's B210
 radio classes into an importable module, not by living in one file.
 
+## Running it
+
+`eve_app.py` is the application: one window for the software simulation, the B210
+loopback bench, EME, and Venus sessions, with settings remembered between runs
+(`%APPDATA%\DSES\EVE_Modem.ini`), the live operator display, and the session report
+PDF shown when a run ends. Create the desktop icon once with
+`powershell -File install-shortcut.ps1` (it runs `launcher.ps1`, which starts the app
+from this repo's `.conda` env with `Library\bin` on PATH). Every control has a tooltip.
+The command-line tools in `tools/` do the same work for scripts.
+
 ## Layout
 
 - `docs/DSES_EVE_Modem_Design_and_ICD.md` — the design description and
@@ -48,11 +58,13 @@ radio classes into an importable module, not by living in one file.
   state, radio status, ephemeris, abort; `--display` on the session and bench tools).
   `gpsdo.py` (Leo Bodnar GPS reference clock over USB HID: status, configuration,
   exact divider planner, setup and lock check; `--gpsdo` on the session and bench
-  tools; bench note in `docs/bench/`).
+  tools; bench note in `docs/bench/`). `decode.py` (offline decode, the decision of
+  record), `report.py` (session report PDF), `app.py` (the application window).
 - `tools/` — `eve_session.py` (plan a session from Horizons, run a schedule on
   the radio, or `sim` it), `eve_decode.py` (offline decode of an archive, the
   decision of record), `eve_bench.py` (B210 loopback: transmit at minimum gain,
-  receive the internal leakage, archive, decode).
+  receive the internal leakage, archive, decode), `eve_txcw.py` (one comb tone into
+  the lab counter: the transmit-frequency check).
 - `tests/` — stage 0-4 tests of the validation plan (design document 5.4):
   Appendix C vectors, galois cross-check, ORI-equation match, loopback on all
   variants, channel calibration, model agreement; conjunction-day geometry

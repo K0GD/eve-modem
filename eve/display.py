@@ -6,6 +6,10 @@ PySide6 + pyqtgraph, the Workbench's binding rules (PySide6 only; the pyqtgraph 
 is forced before pyqtgraph is imported). The live view is for the operator; the decision
 of record is the offline decode of the archive (5.3).
 
+`OperatorPanel` is the widget; it can be bound to one session after another (the
+application reuses it across runs). `OperatorWindow` wraps it in a main window for the
+command-line tools:
+
     from eve.display import run_with_display
     run_with_display(session)          # blocks in the Qt event loop; returns the report
 """
@@ -30,16 +34,21 @@ from . import modem
 TEAL, NAVY, GOLD = "#156082", "#0A2F40", "#B86A18"
 STRIP_ROWS = 300            # frames kept in the tone strip (~105 s of Variant A)
 STRIP_COLS = 512            # candidate bins collapsed 8:1 for display
+MONO = "font-family: 'Source Code Pro', Consolas, monospace;"
 
 
-class OperatorWindow(QtWidgets.QMainWindow):
-    def __init__(self, session, refresh_ms: int = 250):
-        super().__init__()
-        self.session = session
-        self.sched = session.sched
-        self.p: EveParams = session.p
-        self.radio = session.radio
-        self.model = session.model
+class OperatorPanel(QtWidgets.QWidget):
+    """The live view of one session. Call bind(session) before the session runs (it
+    registers the frame listener and takes the session log); unbind() afterwards or
+    simply bind the next session."""
+
+    def __init__(self, refresh_ms: int = 250, parent=None):
+        super().__init__(parent)
+        self.session = None
+        self.sched = None
+        self.p: Optional[EveParams] = None
+        self.radio = None
+        self.model = None
         self._q: "queue.Queue" = queue.Queue(maxsize=4000)
         self._strip = np.zeros((STRIP_ROWS, STRIP_COLS), dtype=np.float32)
         self._strip_k = np.full(STRIP_ROWS, -1, dtype=np.int64)
@@ -48,25 +57,21 @@ class OperatorWindow(QtWidgets.QMainWindow):
         self._last_k: Optional[int] = None
         self._frames = 0
         self._log_lines = []
-        self._done_at = None
-        self._quit_app = None
-        session.listeners.append(self._on_frame)
+        self._log_lock = threading.Lock()
+        self._gpsdo = None
+        self._gpsdo_absent = False
         self._build()
-        self.setWindowTitle(f"DSES EVE modem — {self.sched.session_id}")
-        self.resize(1280, 820)
         self._timer = QtCore.QTimer(self)
         self._timer.timeout.connect(self._refresh)
         self._timer.start(refresh_ms)
         self._radio_timer = QtCore.QTimer(self)
         self._radio_timer.timeout.connect(self._refresh_radio)
         self._radio_timer.start(2000)
-        self._refresh_radio()
+        self._show_idle()
 
     # ---- layout -----------------------------------------------------------------------------
     def _build(self):
-        central = QtWidgets.QWidget()
-        self.setCentralWidget(central)
-        grid = QtWidgets.QGridLayout(central)
+        grid = QtWidgets.QGridLayout(self)
         grid.setContentsMargins(8, 8, 8, 8)
 
         # header: session + phase + clocks
@@ -75,7 +80,7 @@ class OperatorWindow(QtWidgets.QMainWindow):
         self.lbl_phase = QtWidgets.QLabel("idle")
         self.lbl_phase.setStyleSheet(f"font-size: 15px; font-weight: bold; color: white; background: {TEAL}; padding: 3px 8px; border-radius: 3px;")
         self.lbl_clock = QtWidgets.QLabel()
-        self.lbl_clock.setStyleSheet("font-family: 'Source Code Pro', Consolas, monospace; font-size: 12px;")
+        self.lbl_clock.setStyleSheet(MONO + " font-size: 12px;")
         hdr = QtWidgets.QHBoxLayout()
         hdr.addWidget(self.lbl_title, 1)
         hdr.addWidget(self.lbl_phase)
@@ -83,7 +88,8 @@ class OperatorWindow(QtWidgets.QMainWindow):
         grid.addLayout(hdr, 0, 0, 1, 2)
 
         # tone strip + current frame spectrum
-        strip_box = QtWidgets.QGroupBox("Tone strip (frames x candidate bins, newest at top)")
+        strip_box = QtWidgets.QGroupBox("Tone strip (frames x candidate bins, newest at top). 4096-ary FSK sends ONE tone per frame: "
+                                        "one dot per row is the whole signal")
         vb = QtWidgets.QVBoxLayout(strip_box)
         self.strip_plot = pg.PlotWidget()
         self.strip_img = pg.ImageItem()
@@ -111,22 +117,15 @@ class OperatorWindow(QtWidgets.QMainWindow):
         # decisions
         dec_box = QtWidgets.QGroupBox("Running decisions (live accumulator; the offline decode is the decision of record)")
         dv = QtWidgets.QVBoxLayout(dec_box)
-        self.table = QtWidgets.QTableWidget(self.p.n_sym, 6)
+        self.table = QtWidgets.QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["symbol", "expected", "decided", "margin dB", "frames", "state"])
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-        for m in range(self.p.n_sym):
-            for c in range(6):
-                it = QtWidgets.QTableWidgetItem("")
-                it.setTextAlignment(QtCore.Qt.AlignCenter)
-                self.table.setItem(m, c, it)
-            self.table.item(m, 0).setText(str(m))
-            self.table.item(m, 1).setText(str(self.sched.symbols[m]))
         dv.addWidget(self.table)
         self.lbl_decode = QtWidgets.QLabel("no frames yet")
         self.lbl_decode.setWordWrap(True)
-        self.lbl_decode.setStyleSheet("font-family: 'Source Code Pro', Consolas, monospace;")
+        self.lbl_decode.setStyleSheet(MONO)
         dv.addWidget(self.lbl_decode)
         grid.addWidget(dec_box, 1, 1)
 
@@ -134,7 +133,7 @@ class OperatorWindow(QtWidgets.QMainWindow):
         sch_box = QtWidgets.QGroupBox("Schedule")
         sv = QtWidgets.QVBoxLayout(sch_box)
         self.lbl_sched = QtWidgets.QLabel()
-        self.lbl_sched.setStyleSheet("font-family: 'Source Code Pro', Consolas, monospace; font-size: 11px;")
+        self.lbl_sched.setStyleSheet(MONO + " font-size: 11px;")
         self.lbl_sched.setWordWrap(True)
         sv.addWidget(self.lbl_sched)
         self.key_lamp = QtWidgets.QLabel("KEY")
@@ -147,37 +146,121 @@ class OperatorWindow(QtWidgets.QMainWindow):
         rad_box = QtWidgets.QGroupBox("Radio and ephemeris")
         rv = QtWidgets.QVBoxLayout(rad_box)
         self.lbl_radio = QtWidgets.QLabel()
-        self.lbl_radio.setStyleSheet("font-family: 'Source Code Pro', Consolas, monospace; font-size: 11px;")
+        self.lbl_radio.setStyleSheet(MONO + " font-size: 11px;")
         self.lbl_radio.setWordWrap(True)
         rv.addWidget(self.lbl_radio)
         self.lbl_eph = QtWidgets.QLabel()
-        self.lbl_eph.setStyleSheet("font-family: 'Source Code Pro', Consolas, monospace; font-size: 11px;")
+        self.lbl_eph.setStyleSheet(MONO + " font-size: 11px;")
         rv.addWidget(self.lbl_eph)
         self.btn_abort = QtWidgets.QPushButton("ABORT — release key, stop")
         self.btn_abort.setStyleSheet("background: #c0392b; color: white; font-weight: bold; padding: 6px;")
-        self.btn_abort.clicked.connect(lambda: self.session.abort("operator abort from the display"))
+        self.btn_abort.clicked.connect(self._abort_clicked)
         rv.addWidget(self.btn_abort)
         grid.addWidget(rad_box, 3, 1)
 
         # log
         self.log = QtWidgets.QPlainTextEdit()
         self.log.setReadOnly(True)
-        self.log.setMaximumBlockCount(500)
-        self.log.setStyleSheet("font-family: 'Source Code Pro', Consolas, monospace; font-size: 11px;")
+        self.log.setMaximumBlockCount(2000)
+        self.log.setStyleSheet(MONO + " font-size: 11px;")
         grid.addWidget(self.log, 4, 0, 1, 2)
         grid.setRowStretch(1, 3)
         grid.setRowStretch(4, 1)
         grid.setColumnStretch(0, 3)
         grid.setColumnStretch(1, 2)
-        s = self.sched
-        self.lbl_title.setText(f"{s.session_id}  ·  {s.target}  ·  {s.mode}  ·  {s.f_dial_hz / 1e6:.4f} MHz  ·  "
-                               f"Variant {self.p.variant}  ·  '{s.text}'  ·  repeat {s.repeat_count}")
+        self.log.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
+        # operator help
+        strip_box.setToolTip("Each row is one frame (0.35 s); each column a candidate tone (4096 collapsed to 512). "
+                             "The waveform sends ONE tone per frame, so a healthy signal is a single bright dot per "
+                             "row that steps to a new column at every symbol boundary; the pilot is a steady column "
+                             "before each pass. Background texture = receiver noise; adjust RX gain so it is visible "
+                             "but not saturated. Nothing at all = no signal, wrong gain, or the receive window is closed.")
+        self.spec_plot.setToolTip("The metric of the symbol now in progress, summed over its frames so far. Gold "
+                                  "dashed = the tone we sent (expected); red = the current leader. At Venus strength "
+                                  "single frames show nothing and only this sum climbs out of the noise as frames add up.")
+        dec_box.setToolTip("Live decisions from the same accumulators: one row per symbol with the expected tone, the "
+                           "leader so far, its margin over the runner-up in dB, and the frames summed. Green = agrees "
+                           "with what we sent. The offline decode after the run is the decision of record; this view "
+                           "may lag it or differ on a marginal symbol.")
+        self.lbl_decode.setToolTip("The message the live accumulators would decode now, with the BCH correction count "
+                                   "and CRC state. 'CRC ok' with the right text means the message is through.")
+        sch_box.setToolTip("Where the schedule stands: the chunk in progress (transmitting, waiting for the echo, "
+                           "receiving), chunks complete, session start and end, time remaining, frames wanted vs received.")
+        self.key_lamp.setToolTip("Red = the key line to the sequencer is asserted (transmitting). It rises T_lead before "
+                                 "the RF and drops T_lag after it; a watchdog drops it if a chunk overruns the PA limit.")
+        rad_box.setToolTip("B210 state: reference lock (must read LOCKED on the air), rates, frequencies, gains, LO "
+                           "offset health, PPS time-set error; the GPS clock's lock and signal-loss count; the target's "
+                           "azimuth, elevation, round trip, Doppler and Doppler rate from the ephemeris.")
+        self.btn_abort.setToolTip("Release the key line immediately, stop the streams, close the archive, write the log. "
+                                  "Use it for any fault: reference unlock, amplifier trouble, wrong pointing.")
+        self.log.setToolTip("The session log: controller steps, keying events, radio messages, decode results.")
+        self.lbl_phase.setToolTip("Session phase: idle, preparing, armed, TX chunk n, listening, draining, finished, aborted.")
+        self.lbl_clock.setToolTip("PC clock (UTC) and the B210's device time; they agree to milliseconds when the time was set on a PPS.")
+
+    def _abort_clicked(self):
+        if self.session is not None:
+            self.session.abort("operator abort from the display")
 
     def _lamp(self, on: bool):
         self.key_lamp.setStyleSheet(
             "font-size: 16px; font-weight: bold; padding: 6px; border-radius: 4px; color: white; background: "
             + ("#c0392b" if on else "#7f8c8d") + ";")
         self.key_lamp.setText("KEY DOWN — TRANSMITTING" if on else "key up")
+
+    def _show_idle(self):
+        self.lbl_title.setText("no session")
+        self.lbl_phase.setText("idle")
+        self.lbl_sched.setText("Set up a run on the Setup tab and press Start.")
+        self.lbl_eph.setText("")
+        self.lbl_radio.setText("")
+
+    # ---- binding ----------------------------------------------------------------------------
+    def bind(self, session):
+        """Attach a session (before it runs). Resets the strip, the table, and the counters."""
+        self.unbind()
+        self.session = session
+        self.sched = session.sched
+        self.p = session.p
+        self.radio = session.radio
+        self.model = session.model
+        self._strip[:] = 0
+        self._strip_k[:] = -1
+        self._row = 0
+        self._last_metric = self._last_k = None
+        self._frames = 0
+        while not self._q.empty():
+            try:
+                self._q.get_nowait()
+            except queue.Empty:
+                break
+        self.table.setRowCount(self.p.n_sym)
+        for m in range(self.p.n_sym):
+            for c in range(6):
+                it = QtWidgets.QTableWidgetItem("")
+                it.setTextAlignment(QtCore.Qt.AlignCenter)
+                self.table.setItem(m, c, it)
+            self.table.item(m, 0).setText(str(m))
+            self.table.item(m, 1).setText(str(self.sched.symbols[m]))
+        self.lbl_decode.setText("no frames yet")
+        self.lbl_decode.setStyleSheet(MONO)
+        self.spec_curve.setData([], [])
+        s = self.sched
+        self.lbl_title.setText(f"{s.session_id}  ·  {s.target}  ·  {s.mode}  ·  {s.f_dial_hz / 1e6:.4f} MHz  ·  "
+                               f"Variant {self.p.variant}  ·  '{s.text}'  ·  repeat {s.repeat_count}  ·  "
+                               f"{self.p.n_frames} frames/symbol ({self.p.t_sym:.1f} s)")
+        session.listeners.append(self._on_frame)
+        session.log = self.append_log
+        self._refresh_radio()
+
+    def unbind(self):
+        if self.session is not None:
+            try:
+                self.session.listeners.remove(self._on_frame)
+            except ValueError:
+                pass
+        self.session = None
+        self.radio = None
+        self.model = None
 
     # ---- data in ------------------------------------------------------------------------------
     def _on_frame(self, k: int, x: np.ndarray, metric: np.ndarray):
@@ -187,13 +270,18 @@ class OperatorWindow(QtWidgets.QMainWindow):
             pass
 
     def append_log(self, text: str):
-        self._log_lines.append(text)
+        with self._log_lock:
+            self._log_lines.append(f"{iso_utc(time.time(), 0)[11:19]}  {text}")
 
     # ---- refresh ----------------------------------------------------------------------------
     def _refresh(self):
-        if self._done_at is not None and self._quit_app is not None and time.monotonic() - self._done_at > 1.5:
-            self._quit_app.quit()
-            self._quit_app = None
+        with self._log_lock:
+            lines, self._log_lines = self._log_lines, []
+        for line in lines[-200:]:
+            self.log.appendPlainText(line)
+        if self.session is None:
+            self.lbl_clock.setText(f"UTC {iso_utc(time.time(), 0)[11:19]}")
+            return
         drained = 0
         while drained < 200:
             try:
@@ -229,9 +317,6 @@ class OperatorWindow(QtWidgets.QMainWindow):
             self.spec_decided.setPos(int(np.argmax(row)))
             self._refresh_decisions()
         self._refresh_schedule()
-        for line in self._log_lines[-50:]:
-            self.log.appendPlainText(line)
-        self._log_lines = []
 
     def _refresh_decisions(self):
         acc = self.session.acc
@@ -265,8 +350,7 @@ class OperatorWindow(QtWidgets.QMainWindow):
                    f"BCH {'ok' if out.bch_ok else 'fail'} ({out.bits_corrected} corrected)  CRC {'ok' if out.crc_ok else 'fail'}  "
                    f"text '{out.text}'")
             self.lbl_decode.setText(txt)
-            self.lbl_decode.setStyleSheet("font-family: 'Source Code Pro', Consolas, monospace; font-weight: bold; color: "
-                                          + ("#1e7d3a" if out.ok else "#7f2a1e") + ";")
+            self.lbl_decode.setStyleSheet(MONO + " font-weight: bold; color: " + ("#1e7d3a" if out.ok else "#7f2a1e") + ";")
         except Exception as e:
             self.lbl_decode.setText(f"decode error: {e}")
 
@@ -304,11 +388,15 @@ class OperatorWindow(QtWidgets.QMainWindow):
             else:
                 lines.append(f"chunk {c.index + 1} of {len(s.chunks)}: done")
         done = sum(1 for c in s.chunks if now > c.rx_stop)
-        lines.append(f"chunks complete {done}/{len(s.chunks)}   session {iso_utc(s.t_start, 0)[11:19]} .. {iso_utc(s.t_end, 0)[11:19]} UTC")
+        remaining = max(0.0, s.t_end - now)
+        lines.append(f"chunks complete {done}/{len(s.chunks)}   session {iso_utc(s.t_start, 0)[11:19]} .. {iso_utc(s.t_end, 0)[11:19]} UTC"
+                     f"   remaining {int(remaining // 60):d}:{int(remaining % 60):02d}")
         lines.append(f"frames wanted {s.n_frames_wanted}  received {self._frames}")
         self.lbl_sched.setText("\n".join(lines))
 
     def _refresh_radio(self):
+        if self.session is None:
+            return
         try:
             if hasattr(self.radio, "status"):
                 st = self.radio.status()
@@ -324,8 +412,8 @@ class OperatorWindow(QtWidgets.QMainWindow):
             txt = f"radio status unavailable: {e}"
         try:
             from . import gpsdo as _gpsdo
-            g = getattr(self, "_gpsdo", None)
-            if g is None and not getattr(self, "_gpsdo_absent", False):
+            g = self._gpsdo
+            if g is None and not self._gpsdo_absent:
                 try:
                     g = self._gpsdo = _gpsdo.LeoBodnarGPSDO()
                 except Exception:
@@ -349,13 +437,46 @@ class OperatorWindow(QtWidgets.QMainWindow):
             self.lbl_eph.setText(f"ephemeris: {e}")
 
 
+class OperatorWindow(QtWidgets.QMainWindow):
+    """A main window around one OperatorPanel, bound to one session (the command-line
+    tools' --display)."""
+
+    def __init__(self, session, refresh_ms: int = 250):
+        super().__init__()
+        self.panel = OperatorPanel(refresh_ms)
+        self.setCentralWidget(self.panel)
+        self.panel.bind(session)
+        self.session = session
+        self._done_at = None
+        self._quit_app = None
+        self.setWindowTitle(f"DSES EVE modem — {session.sched.session_id}")
+        self.resize(1280, 820)
+        self._t = QtCore.QTimer(self)
+        self._t.timeout.connect(self._maybe_quit)
+        self._t.start(250)
+
+    def append_log(self, text: str):
+        self.panel.append_log(text)
+
+    def __getattr__(self, name):
+        # the tools and tests reach the panel's widgets and counters through the window
+        panel = self.__dict__.get("panel")
+        if panel is None:
+            raise AttributeError(name)
+        return getattr(panel, name)
+
+    def _maybe_quit(self):
+        if self._done_at is not None and self._quit_app is not None and time.monotonic() - self._done_at > 1.5:
+            self._quit_app.quit()
+            self._quit_app = None
+
+
 def run_with_display(session, app: Optional[QtWidgets.QApplication] = None, exit_when_done: bool = True,
                      screenshot: Optional[str] = None, screenshot_after_s: float = 20.0):
     """Run the session in a background thread with the operator window in the Qt loop.
     Returns the SessionReport."""
     app = app or QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     win = OperatorWindow(session)
-    session.log = win.append_log
     result = {}
 
     def worker():

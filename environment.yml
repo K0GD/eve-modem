@@ -41,3 +41,6 @@ dependencies:
     - sigmf
     # Leo Bodnar GPS reference clock over USB HID (eve/gpsdo.py)
     - hidapi
+    # renders the session report PDF inside the application (eve/app.py); the conda
+    # PySide6 build has no working QtPdfWidgets on Windows
+    - pymupdf
