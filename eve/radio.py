@@ -36,7 +36,8 @@ class RadioConfig:
     tx_gain_db: float = 0.0             # B210 TX gain; the session tool sets the real value
     rx_gain_db: float = 40.0
     clock_source: str = "external"      # external | gpsdo | internal (bench only)
-    time_source: Optional[str] = None   # default: follows clock_source
+    time_source: Optional[str] = None   # default: follows clock_source; "host" = no PPS available:
+                                        # device time set from the host clock (NTP) with set_time_now
     require_ref_lock: bool = True       # refuse to run unless ref_locked (7.1)
     lo_offset_hz: float = -300e3
     tx_antenna: str = "TX/RX"
@@ -91,6 +92,7 @@ class EveRadio:
         self.tx_lo_ok = False
         self.pps_error_s: Optional[float] = None
         self._keyed = False
+        self.host_timed = False
         self.log = lambda s: print(s, file=sys.stderr)
 
     # ---- lifecycle -----------------------------------------------------------------------
@@ -113,11 +115,21 @@ class EveRadio:
         self.tx_lo_ok = R.tune_with_lo_offset(self.tx, cfg.f_dial_hz, cfg.lo_offset_hz, 0, self.log)
         self.tx_rate = float(self.tx.get_samp_rate())
         # reference and time (per motherboard: one call covers both streams)
-        R.set_reference(self.rx.block, cfg.clock_source, cfg.time_source)
+        self.host_timed = cfg.time_source == "host"
+        R.set_reference(self.rx.block, cfg.clock_source, "internal" if self.host_timed else cfg.time_source)
         locked = R.wait_ref_locked(self.rx.block, 5.0)
         if cfg.require_ref_lock and cfg.clock_source != "internal" and not locked:
             raise RuntimeError(f"reference not locked ({cfg.clock_source}); refusing to start (ICD 7.1)")
-        if set_time:
+        if set_time and self.host_timed:
+            # No PPS (e.g. a 10 MHz-only GPS reference): the epoch comes from the host's NTP
+            # clock through set_time_now. Accuracy = NTP error + a few ms of command latency,
+            # well inside the one-frame (0.35 s) tolerance of 4.3; the frequency is still exact.
+            t_host = time.time()
+            self.rx.block.set_time_now(uhd.time_spec(t_host))
+            self.pps_error_s = self.device_time() - time.time()
+            if abs(self.pps_error_s) > 0.05:
+                raise RuntimeError(f"USRP time did not follow the host clock (error {self.pps_error_s:+.3f} s)")
+        elif set_time:
             self.pps_error_s = R.set_time_utc_on_pps(self.rx.block)
             if abs(self.pps_error_s) > 1e-3:
                 raise RuntimeError(f"USRP time did not take on the PPS edge (error {self.pps_error_s:+.6f} s)")
@@ -139,7 +151,10 @@ class EveRadio:
 
     def verify_pps(self, wait_s: float = 2.5) -> bool:
         """Two consecutive PPS timestamps differ by exactly one second (4.3: 'verified
-        against a second PPS before the session')."""
+        against a second PPS before the session'). Host-timed radios have no PPS to
+        verify; the check is the host-clock agreement instead."""
+        if self.host_timed:
+            return abs(self.device_time() - time.time()) < 0.05
         t1 = float(self.rx.block.get_time_last_pps().get_real_secs())
         deadline = time.monotonic() + wait_s
         while time.monotonic() < deadline:

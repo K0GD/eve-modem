@@ -81,7 +81,8 @@ def cmd_run(a):
         sched = _shift_to_now(sched, model, 8.0)
     print(S.describe(sched, model))
     cfg = RadioConfig(serial=a.serial, f_dial_hz=sched.f_dial_hz, tx_gain_db=a.tx_gain, rx_gain_db=a.rx_gain,
-                      clock_source=a.clock, require_ref_lock=not a.no_ref_check, lo_offset_hz=a.lo_offset)
+                      clock_source=a.clock, time_source=a.time_source, require_ref_lock=not a.no_ref_check,
+                      lo_offset_hz=a.lo_offset)
     radio = EveRadio(sched.params, cfg)
     st = radio.open()
     print(st.summary())
@@ -167,6 +168,7 @@ def main(argv=None):
     rn.add_argument("--tx-gain", type=float, default=0.0)
     rn.add_argument("--rx-gain", type=float, default=40.0)
     rn.add_argument("--clock", default="external", help="external | gpsdo | internal")
+    rn.add_argument("--time-source", default=None, help="external | gpsdo | internal | host (no PPS: epoch from the host NTP clock)")
     rn.add_argument("--no-ref-check", action="store_true")
     rn.add_argument("--lo-offset", type=float, default=-300e3)
     rn.add_argument("--archive", default="archive")

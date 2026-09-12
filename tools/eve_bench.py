@@ -79,7 +79,7 @@ def main(argv=None):
     try:
         if a.display:
             from eve.display import run_with_display
-            rep = run_with_display(sess)
+            rep = run_with_display(sess, exit_when_done=False)   # window stays up until closed
         else:
             rep = sess.run()
     finally:

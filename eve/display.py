@@ -351,6 +351,7 @@ def run_with_display(session, app: Optional[QtWidgets.QApplication] = None, exit
             result["error"] = e
             win.append_log(f"session error: {e!r}")
         finally:
+            win.append_log("session finished" + ("" if exit_when_done else " - close the window to exit"))
             if exit_when_done:
                 win._quit_app = app          # the GUI thread quits from its own timer (a
                 win._done_at = time.monotonic()   # QTimer started from this thread would not fire)
