@@ -12,6 +12,9 @@ No antenna is needed and none should be connected to TX/RX for this test.
 """
 from __future__ import annotations
 
+import os
+os.environ.setdefault("PYQTGRAPH_QT_LIB", "PySide6")
+
 import argparse
 import sys
 import time
@@ -49,6 +52,7 @@ def main(argv=None):
     ap.add_argument("--message", default="K0PRT K0PRT")
     ap.add_argument("--archive", default="archive_bench")
     ap.add_argument("--lead", type=float, default=15.0, help="seconds from now to the first chunk (>= arm lead 8 s + margin)")
+    ap.add_argument("--display", action="store_true", help="operator display (PySide6)")
     a = ap.parse_args(argv)
 
     p = replace(EveParams.named(a.variant), n_frames=a.n_frames, pilot_frames=a.pilot_frames)
@@ -73,7 +77,11 @@ def main(argv=None):
                           live_decode=True, start_margin_s=2.0)
     sess = Session(sched, model, radio, opts)
     try:
-        rep = sess.run()
+        if a.display:
+            from eve.display import run_with_display
+            rep = run_with_display(sess)
+        else:
+            rep = sess.run()
     finally:
         radio.close()
     print(f"\nsession: aborted={rep.aborted} {rep.abort_reason}; chunks keyed {rep.chunks_keyed}; "

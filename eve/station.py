@@ -139,6 +139,8 @@ class Session:
         self.tone = None
         self.sink = None
         self.acc: Optional[modem.SymbolAccumulator] = None
+        self.listeners: List[Callable[[int, np.ndarray, np.ndarray], None]] = []   # (frame k, samples, metric)
+        self.phase = "idle"
 
     # ---- interlocks (7.2) ------------------------------------------------------------------
     def preflight(self) -> List[str]:
@@ -180,11 +182,13 @@ class Session:
             if not self._sleep_until(t_on):
                 return
             self.radio.key(True)
+            self.phase = f"TX chunk {c.index + 1} of {len(self.sched.chunks)}"
             self.report.key_events.append({"t": self.radio.device_time(), "on": True, "chunk": c.index})
             self.report.chunks_keyed += 1
             limit = t_off + (PA_T_ON_MAX_S if self.opts.pa_in_chain else 3600.0)
             ok = self._sleep_until(t_off, watchdog=limit)
             self.radio.key(False)
+            self.phase = f"listening for chunk {c.index + 1} of {len(self.sched.chunks)}"
             self.report.key_events.append({"t": self.radio.device_time(), "on": False, "chunk": c.index})
             if not ok:
                 return
@@ -233,10 +237,15 @@ class Session:
         self.decim = gr_blocks.make_rx_decimator(p, self.radio.rx_rate, f_shift)
         self.acc = modem.SymbolAccumulator(p, s.frame_map())
         bank = modem.FrameBank(p)
-        on_frame = None
-        if opts.live_decode:
-            def on_frame(k, x):
-                self.acc.add(k, bank.frame_metric(x))
+        def on_frame(k, x):
+            metric = bank.frame_metric(x)
+            if opts.live_decode:
+                self.acc.add(k, metric)
+            for fn in self.listeners:
+                try:
+                    fn(k, x, metric)
+                except Exception:
+                    pass
         meta = {"f_dial_hz": s.f_dial_hz, "f_if_hz": p.f_if, "doppler_applied_on_rx": bool(opts.rx_doppler_removal),
                 "tx_precompensated": bool(opts.tx_precompensate), "radio": getattr(self.radio, "status_text", lambda: "B210")()}
         self.sink = gr_blocks.EveRxSink(p, opts.out_dir, s.session_id, windows, self.radio.rx_rate / p.radio_decim,
@@ -301,6 +310,7 @@ class Session:
             if self._abort.is_set():
                 return self._finish(rt, old_handler)
             tb.start()
+            self.phase = "armed"
             keyer.start()
             if steer:
                 steer.start()
@@ -320,9 +330,11 @@ class Session:
                 if quiet >= 3:
                     break
                 time.sleep(0.25)
+            self.phase = "draining"
             tb.stop()
             tb.wait()
         finally:
+            self.phase = "finished" if not self._abort.is_set() else "aborted"
             self.report = self._finish(rt, old_handler)
         return self.report
 

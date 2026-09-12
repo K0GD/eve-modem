@@ -17,6 +17,9 @@ Add --now to shift a planned schedule so its first chunk starts a few seconds fr
 """
 from __future__ import annotations
 
+import os
+os.environ.setdefault("PYQTGRAPH_QT_LIB", "PySide6")   # entry point: force the pyqtgraph backend
+
 import argparse
 import sys
 import time
@@ -90,7 +93,7 @@ def cmd_run(a):
                           tx_precompensate=not a.no_precomp, live_decode=True)
     sess = Session(sched, model, radio, opts)
     try:
-        rep = sess.run()
+        rep = _run(sess, a)
     finally:
         radio.close()
     _print_report(rep)
@@ -113,9 +116,17 @@ def cmd_sim(a):
     radio = SimRadio(p, cn0_db=a.cn0, seed=a.seed)
     opts = SessionOptions(out_dir=a.archive, pa_in_chain=False, tx_precompensate=False, live_decode=True,
                           start_margin_s=1.0, realtime_mode=False)
-    rep = Session(sched, model, radio, opts).run()
+    rep = _run(Session(sched, model, radio, opts), a)
     _print_report(rep)
     return 0
+
+
+def _run(sess, a):
+    if getattr(a, "display", False):
+        from eve.display import run_with_display
+        return run_with_display(sess, screenshot=getattr(a, "screenshot", None),
+                                screenshot_after_s=getattr(a, "screenshot_after", 20.0))
+    return sess.run()
 
 
 def _print_report(rep):
@@ -163,6 +174,9 @@ def main(argv=None):
     rn.add_argument("--rx-doppler", action="store_true", help="remove the model Doppler on receive (not the pre-compensated receiver)")
     rn.add_argument("--no-precomp", action="store_true")
     rn.add_argument("--now", action="store_true", help="shift the schedule to start 8 s from now")
+    rn.add_argument("--display", action="store_true", help="operator display (PySide6)")
+    rn.add_argument("--screenshot", default=None, help=argparse.SUPPRESS)
+    rn.add_argument("--screenshot-after", type=float, default=20.0, help=argparse.SUPPRESS)
     rn.set_defaults(fn=cmd_run)
 
     sm = sub.add_parser("sim")
@@ -179,6 +193,9 @@ def main(argv=None):
     sm.add_argument("--seed", type=int, default=1)
     sm.add_argument("--session-id", default="SIM")
     sm.add_argument("--archive", default="archive_sim")
+    sm.add_argument("--display", action="store_true", help="operator display (PySide6)")
+    sm.add_argument("--screenshot", default=None, help=argparse.SUPPRESS)
+    sm.add_argument("--screenshot-after", type=float, default=20.0, help=argparse.SUPPRESS)
     sm.set_defaults(fn=cmd_sim)
 
     a = ap.parse_args(argv)

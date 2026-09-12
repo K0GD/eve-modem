@@ -43,6 +43,9 @@ radio classes into an importable module, not by living in one file.
   `EveRxSink`, the per-window archive writer with gap padding), `station.py`
   (`Session`: keyer with T_lead/T_lag, PA duty interlocks, abort, one flowgraph
   for the whole session, session log; `SimRadio` for the software bench).
+  `display.py` (`OperatorWindow`, PySide6 + pyqtgraph: tone strip, accumulated
+  metric of the current symbol, running decisions with margins, chunk and keying
+  state, radio status, ephemeris, abort; `--display` on the session and bench tools).
 - `tools/` — `eve_session.py` (plan a session from Horizons, run a schedule on
   the radio, or `sim` it), `eve_decode.py` (offline decode of an archive, the
   decision of record), `eve_bench.py` (B210 loopback: transmit at minimum gain,
@@ -61,7 +64,8 @@ Project-local conda env, like the Workbench:
 
     C:\ProgramData\radioconda\Scripts\conda.exe env create --prefix .\.conda -f environment.yml
     conda activate .\.conda          (numpy's BLAS needs the env's Library\bin on PATH)
-    python -m pytest tests -q            # 35 tests, ~80 s
+    python -m pytest tests -q            # 36 tests, ~80 s
+    python tools/eve_session.py sim --display     # software bench with the operator display
     python tools/eve_bench.py             # B210 loopback, ~1 min, no antenna needed
     .conda\python.exe -m eve.montecarlo                 # ORI-style link table, Variant A
     .conda\python.exe -m eve.montecarlo --variant B
