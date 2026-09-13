@@ -31,7 +31,7 @@ from typing import Dict, List, Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from . import __version__
+from . import __version__, log_dir
 from .params import EveParams
 from . import doppler as D
 from . import schedule as S
@@ -407,7 +407,7 @@ class RunController(QtCore.QObject):
                 code = proc.exitcode
                 finished = {"ok": False, "pdf": None,
                             "error": f"the run worker stopped without a result (exit code {code}); see fault.log and app.log "
-                                     f"under %LOCALAPPDATA%\\DSES\\EVE_Modem. The window is unaffected: fix the cause and Start again."}
+                                     f"in {log_dir()}. The window is unaffected: fix the cause and Start again."}
                 self.log.emit("ERROR: " + finished["error"])
             if self.session is not None:
                 self.session_done.emit()

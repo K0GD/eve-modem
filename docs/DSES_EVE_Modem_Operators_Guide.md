@@ -52,8 +52,9 @@ the program.
 
 Double-click the **DSES EVE Modem** desktop icon (created once with
 `install-shortcut.ps1`). The window opens on the Setup tab with the last settings. The
-status bar shows where the settings file is. If the program does not start, the log is
-in `%LOCALAPPDATA%\DSES\EVE_Modem\app.log`.
+status bar shows where the settings file is. If the program does not start, read the log:
+`%LOCALAPPDATA%\DSES\EVE_Modem\app.log` on Windows, `~/Library/Logs/DSES_EVE_Modem/app.log` on macOS,
+`~/.local/state/dses-eve-modem/app.log` on Linux. A hard crash leaves `fault.log` beside it.
 
 **Updates.** Once a day at start-up, and whenever you choose Help → Check for updates…,
 the program asks gpstime whether a newer version is published. A newer one opens a
@@ -233,8 +234,8 @@ about −20 dBm at RX2, so 30 to 40 dB of attenuation between two radios on the 
 | "chunk would hold no frames" | The chunk settings leave no room between the round trip and the guard. Restore the mode's defaults. |
 | Horizons unreachable | The ephemeris source falls back to astropy with the local DE440s. The Doppler differs by up to 10 Hz at 13 cm; acceptable, but note it in the log. |
 | "the run worker died while opening the radio ... retrying" | Every run lives in its own worker process, and opening the B210 faults about one time in seven on Windows (a UHD fault, not the radio). The program retries the open up to three times by itself; the log shows each try. If all three fail, power-cycle the B210 (USB and DC off for 15 s) and Start again. The window never closes because of it. |
-| The program closes by itself | A native library crashed. Two files under `%LOCALAPPDATA%\DSES\EVE_Modem` tell the story: `app.log` (everything the program printed) and `fault.log` (the traceback of a hard crash). Send both. If the B210 was left streaming by a program that was killed, power-cycle it (USB and DC off for 15 s) before the next try. |
-| The program will not start from the icon | Read `%LOCALAPPDATA%\DSES\EVE_Modem\app.log`. The project environment must exist in `.conda` next to the program. |
+| The program closes by itself | A native library crashed. Two files in the log folder (section 3) tell the story: `app.log` (everything the program printed) and `fault.log` (the traceback of a hard crash). Send both. If the B210 was left streaming by a program that was killed, power-cycle it (USB and DC off for 15 s) before the next try. |
+| The program will not start from the icon | Read `app.log` in the log folder (section 3). The project environment must exist in `.conda` next to the program. |
 
 # 9. Files a run produces
 
@@ -269,6 +270,16 @@ use the same zip.
    jplephem, pyside6, pyqtgraph, matplotlib, pytest, and the pip extras galois, sigmf,
    hidapi, pymupdf, pyserial. On Linux the USB HID clock and the CH340 relay need the
    usual udev permissions (a rule for USB 1dd2:2210, membership of `dialout`).
+   **Lighter alternative** if the machine already runs the DSES Workbench from radioconda:
+   skip the new environment and add the extras to radioconda instead, then the launcher
+   finds it by itself:
+
+   ```
+   ~/radioconda/bin/pip install galois sigmf hidapi pymupdf pyserial astropy jplephem
+   ```
+
+   (Windows: `C:\ProgramData\radioconda\Scripts\pip.exe`, and set `EVE_PYTHON` or
+   `RADIOCONDA_ROOT` if the launcher does not find it.)
 4. Start it: Windows `launcher.bat` (or `install-shortcut.ps1` once for a desktop icon);
    macOS `launcher.command` (or `install-shortcut.command` once for an app on the
    Desktop); Linux `bash launcher.sh` (or `install-shortcut.command` once for a menu

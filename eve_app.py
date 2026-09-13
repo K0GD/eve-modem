@@ -18,9 +18,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import faulthandler  # noqa: E402
 
 # A hard crash (access violation in a native library) leaves its traceback here.
-_logdir = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "DSES", "EVE_Modem")
-os.makedirs(_logdir, exist_ok=True)
-_fault = open(os.path.join(_logdir, "fault.log"), "a")
+from eve import log_dir  # noqa: E402
+
+_fault = open(os.path.join(str(log_dir()), "fault.log"), "a")
 faulthandler.enable(file=_fault, all_threads=True)
 
 from eve.app import main  # noqa: E402

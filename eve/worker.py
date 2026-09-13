@@ -369,9 +369,8 @@ class Runner:
 def run_job(cfg: Dict, preview_only: bool, conn, redecode: Optional[str] = None) -> None:
     import faulthandler
     try:
-        logdir = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "DSES", "EVE_Modem")
-        os.makedirs(logdir, exist_ok=True)
-        faulthandler.enable(file=open(os.path.join(logdir, "fault.log"), "a"), all_threads=True)
+        from . import log_dir
+        faulthandler.enable(file=open(os.path.join(str(log_dir()), "fault.log"), "a"), all_threads=True)
     except Exception:
         pass
     pending = {"abort": None}

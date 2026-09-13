@@ -37,4 +37,11 @@ sizes = [16, 24, 32, 48, 64, 128, 256]
 imgs = [draw(s) for s in sizes]
 imgs[-1].save(here / "eve_modem.png")
 imgs[-1].save(here / "eve_modem.ico", sizes=[(s, s) for s in sizes], append_images=imgs[:-1])
+# macOS app bundle icon (install-shortcut.command copies it into the .app)
+try:
+    big = imgs[-1].resize((1024, 1024), Image.LANCZOS)
+    big.save(here / "eve_modem.icns", format="ICNS", sizes=[(16, 16), (32, 32), (64, 64), (128, 128), (256, 256), (512, 512), (1024, 1024)])
+    print("wrote", here / "eve_modem.icns")
+except Exception as e:      # noqa: BLE001
+    print("icns not written:", e)
 print("wrote", here / "eve_modem.ico", "and .png")
