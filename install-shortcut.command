@@ -7,8 +7,12 @@ case "$(uname)" in
     Darwin)
         app="$HOME/Desktop/DSES EVE Modem.app"
         mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+        # A Finder-launched app inherits no shell variables, so if this run found its
+        # Python through EVE_PYTHON / RADIOCONDA_ROOT, bake that into the bundle.
         cat > "$app/Contents/MacOS/DSES EVE Modem" <<EOF
 #!/usr/bin/env bash
+${EVE_PYTHON:+export EVE_PYTHON="$EVE_PYTHON"}
+${RADIOCONDA_ROOT:+export RADIOCONDA_ROOT="$RADIOCONDA_ROOT"}
 exec "$here/launcher.sh"
 EOF
         chmod +x "$app/Contents/MacOS/DSES EVE Modem"
@@ -23,7 +27,12 @@ EOF
   <key>CFBundlePackageType</key><string>APPL</string>
 </dict></plist>
 EOF
-        [ -f "$here/icons/eve_modem.icns" ] && cp "$here/icons/eve_modem.icns" "$app/Contents/Resources/"
+        if [ -f "$here/icons/eve_modem.icns" ]; then
+            cp "$here/icons/eve_modem.icns" "$app/Contents/Resources/"
+        else
+            echo "note: icons/eve_modem.icns not found; the app gets a generic icon"
+        fi
+        touch "$app"                       # Finder re-reads the bundle (icon) after this
         echo "Created: $app"
         ;;
     *)

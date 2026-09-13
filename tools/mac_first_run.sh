@@ -10,6 +10,7 @@
 #
 #   curl -fsSL https://gpstime.com/sw_distribution/eve-modem/mac_first_run.sh | bash
 #   bash mac_first_run.sh [version]        # default: the version the manifest names
+#   bash mac_first_run.sh --shortcut-only  # just (re)make the Desktop app for an installed copy
 set -euo pipefail
 
 BASE="https://gpstime.com/sw_distribution/eve-modem"
@@ -17,6 +18,23 @@ DEST="$HOME/Applications"
 EXTRAS="galois sigmf hidapi pymupdf pyserial astropy jplephem"
 
 say() { printf '\n== %s\n' "$*"; }
+
+make_shortcut() {   # $1 = install folder
+    local app="$1"
+    if [ ! -f "$app/icons/eve_modem.icns" ]; then       # the 1.0.0 zip shipped without it
+        mkdir -p "$app/icons"
+        curl -fsSL -o "$app/icons/eve_modem.icns" "$BASE/eve_modem.icns" || rm -f "$app/icons/eve_modem.icns"
+    fi
+    say "making the Desktop shortcut"
+    bash "$app/install-shortcut.command"
+}
+
+if [ "${1:-}" = "--shortcut-only" ]; then
+    APP="$(ls -d "$DEST"/eve-modem-[0-9]* 2>/dev/null | grep -v '\.old$' | sort -V | tail -n 1 || true)"
+    [ -n "$APP" ] || { echo "no eve-modem-<version> folder under $DEST" >&2; exit 1; }
+    make_shortcut "$APP"
+    exit 0
+fi
 
 # 1. the environment ---------------------------------------------------------
 usable() { [ -n "${1:-}" ] && [ -x "$1/bin/python" ] && "$1/bin/python" -c "import gnuradio, PySide6" >/dev/null 2>&1; }
@@ -75,7 +93,9 @@ export EVE_PYTHON="$PY"
 LPID=$!
 sleep 10
 if kill -0 "$LPID" 2>/dev/null; then
-    say "running (pid $LPID). Next: install-shortcut.command in $APP makes the Desktop app."
+    say "running (pid $LPID)"
+    make_shortcut "$APP"
+    say "done. Quit the program window when you are finished; from now on start it from the Desktop app."
 else
     case "$(uname)" in Darwin) LOG="$HOME/Library/Logs/DSES_EVE_Modem/app.log" ;; *) LOG="${XDG_STATE_HOME:-$HOME/.local/state}/dses-eve-modem/app.log" ;; esac
     say "the program exited within 10 s; last lines of $LOG:"
