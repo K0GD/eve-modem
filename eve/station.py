@@ -127,10 +127,14 @@ class SessionReport:
 
 class Session:
     def __init__(self, schedule: Schedule, model: Optional[DopplerModel], radio, opts: Optional[SessionOptions] = None,
-                 log: Callable[[str], None] = None):
+                 log: Callable[[str], None] = None, keyer=None):
         self.sched = schedule
         self.model = model
         self.radio = radio
+        # the key line to the sequencer (7.2): a Keyer object; default = the radio's own
+        # GPIO line (EveRadio.key) or the simulated radio's log
+        from . import keyer as _keyer
+        self.keyer = keyer if keyer is not None else _keyer.GpioKeyer(radio)
         self.opts = opts or SessionOptions()
         self.log = log or (lambda s: print(s, file=sys.stderr, flush=True))
         self.p = schedule.params
@@ -170,7 +174,7 @@ class Session:
             self.report.abort_reason = reason
             self._abort.set()
             try:
-                self.radio.key(False)
+                self.keyer.key(False)
                 self.report.key_events.append({"t": time.time(), "on": False, "why": f"abort: {reason}"})
             except Exception:
                 pass
@@ -185,13 +189,15 @@ class Session:
             t_off = c.tx_stop + self.opts.t_lag_s
             if not self._sleep_until(t_on):
                 return
-            self.radio.key(True)
+            self.keyer.key(True)
+            if self.keyer.fault:
+                self.log(f"KEY LINE FAULT on chunk {c.index + 1}: {self.keyer.fault}")
             self.phase = f"TX chunk {c.index + 1} of {len(self.sched.chunks)}"
             self.report.key_events.append({"t": self.radio.device_time(), "on": True, "chunk": c.index})
             self.report.chunks_keyed += 1
             limit = t_off + (PA_T_ON_MAX_S if self.opts.pa_in_chain else 3600.0)
             ok = self._sleep_until(t_off, watchdog=limit)
-            self.radio.key(False)
+            self.keyer.key(False)
             self.phase = f"listening for chunk {c.index + 1} of {len(self.sched.chunks)}"
             self.report.key_events.append({"t": self.radio.device_time(), "on": False, "chunk": c.index})
             if not ok:
@@ -347,7 +353,7 @@ class Session:
 
     def _finish(self, rt, old_handler) -> SessionReport:
         try:
-            self.radio.key(False)
+            self.keyer.key(False)
         except Exception:
             pass
         if self.sink is not None:

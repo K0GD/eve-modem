@@ -49,6 +49,7 @@ MODES = [("sim", "Software simulation (no radio)"),
 PREFIX = {"sim": "SIM", "bench": "BENCH", "interop": "INTEROP", "eme": "EME", "eve": "EVE"}
 TARGET = {"sim": "sim", "bench": "bench", "interop": "partner", "eme": "moon", "eve": "venus"}
 FULL_FRAMES = {"A": 473, "B": 247, "MATLAB": 540}
+KEYER_KINDS = {"none": "none", "B210 GPIO": "gpio", "USB relay board": "usb_relay"}
 
 # "Set defaults" for a run mode: every setting the mode cares about goes to the design
 # value (the design document's numbers; bench values from the 2026-09-11/12 loopback).
@@ -57,7 +58,7 @@ COMMON_DEFAULTS = {"variant": "A", "message": "K0PRT K0PRT", "pilot": True, "n_f
 MODE_DEFAULTS = {
     "sim": {"f_dial_mhz": 1296.0, "repeat": 1, "full_symbol": False, "sim_cn0": 20.0, "sim_range_km": 375000.0,
             "sim_seed": 1, "bench_chunk_s": 2.4, "bench_t_off_min": 0.5, "lead_s": 12.0},
-    "bench": {"f_dial_mhz": 1296.0, "repeat": 2, "full_symbol": False, "tx_gain": 0.0, "rx_gain": 30.0,
+    "bench": {"f_dial_mhz": 1296.0, "repeat": 2, "full_symbol": False, "tx_gain": 0.0, "rx_gain": 30.0, "keyer_kind": "none",
               "bench_range_km": 0.15, "bench_chunk_s": 2.4, "bench_t_off_min": 0.5, "lead_s": 15.0},
     "interop": {"f_dial_mhz": 1296.0, "repeat": 1, "full_symbol": True, "tx_gain": 30.0, "rx_gain": 30.0,
                 "interop_chunk_s": 300.0, "interop_search_frames": 30, "sky_start_now": True, "lead_s": 30.0},
@@ -166,6 +167,14 @@ TIPS: Dict[str, str] = {
                  "program sets it to the station setting (OUT1 10 MHz at level 1, OUT2 disabled = 1 PPS) and waits "
                  "for lock before opening the radio. Untick for any other reference (the HP5065A rubidium and a PPS "
                  "source, or a GPSDO the program cannot talk to); the B210's own lock check still runs.",
+    "keyer_kind": "What closes the sequencer's key line while we transmit. none: nothing is keyed (loopback bench, "
+                  "simulation, receive only). B210 GPIO: J504 GPIO_0 through an isolated driver (needs the header brought "
+                  "out of the case). USB relay board: the LCUS-type CH340 relay board on a COM port; its normally-open "
+                  "contact across the sequencer input. The line rises T_lead before the RF and drops T_lag after.",
+    "keyer_port": "The relay board's COM port (Device Manager: USB-SERIAL CH340). CH340 boards are listed first; press "
+                  "Refresh after plugging one in. The port is opened before the radio, so a wrong port stops the run "
+                  "before any RF.",
+    "keyer_channel": "Which relay on the board keys the sequencer (1 or 2). The other is spare.",
     "mode:interop": "Compatibility test with ORI's own hardware and software, on the bench (cable and attenuator) "
                     "or across the room. Transmit only: we send the agreed message at the agreed UTC time and the "
                     "partner's receiver decodes it. Receive only: the partner transmits (their generator has no pilot: "
@@ -199,6 +208,7 @@ class Settings:
         "eme_chunk_s": 2.4, "eme_pa": False, "eme_t_off_min": 0.5, "eme_rtt_guard": 0.1, "eme_t_on_max": 300.0,
         "interop_dir": "Transmit only (the partner receives)", "interop_chunk_s": 300.0, "interop_search_frames": 30,
         "report_zoom": 100,
+        "keyer_kind": "none", "keyer_port": "", "keyer_channel": 1,
     }
 
     def __init__(self):
@@ -913,6 +923,38 @@ class EveApp(QtWidgets.QMainWindow):
         f.addRow("Archive folder", arow)
         left.addWidget(gb)
 
+        # keying
+        gb = QtWidgets.QGroupBox("Keying (the sequencer line)")
+        f = QtWidgets.QFormLayout(gb)
+        self.w["keyer_kind"] = cb = QtWidgets.QComboBox()
+        cb.addItems(["none", "B210 GPIO", "USB relay board"])
+        cb.currentTextChanged.connect(lambda _t: self._keyer_changed())
+        f.addRow("Keyer", cb)
+        krow = QtWidgets.QHBoxLayout()
+        self.w["keyer_port"] = pc = QtWidgets.QComboBox()
+        pc.setEditable(True)
+        pc.setMinimumWidth(260)
+        krow.addWidget(pc, 1)
+        b = QtWidgets.QPushButton("Refresh")
+        b.setToolTip("Re-scan the serial ports.")
+        b.clicked.connect(self._refresh_ports)
+        krow.addWidget(b)
+        self.btn_testkey = QtWidgets.QPushButton("Test key")
+        self.btn_testkey.setToolTip("Click the relay once: on for a second, then off, and log the board's status reply. "
+                                    "Nothing else is touched; the radio stays closed.")
+        self.btn_testkey.clicked.connect(self._test_key)
+        krow.addWidget(self.btn_testkey)
+        f.addRow("Port", krow)
+        self.w["keyer_channel"] = sp = QtWidgets.QSpinBox()
+        sp.setRange(1, 2)
+        f.addRow("Relay channel", sp)
+        self.lbl_keyer = QtWidgets.QLabel("")
+        self.lbl_keyer.setWordWrap(True)
+        self.lbl_keyer.setStyleSheet(f"color: {TEAL};")
+        f.addRow("", self.lbl_keyer)
+        left.addWidget(gb)
+        self._refresh_ports()
+
         # mode specific
         self.mode_stack = QtWidgets.QStackedWidget()
         # sim
@@ -1123,7 +1165,12 @@ class EveApp(QtWidgets.QMainWindow):
                 wd.setChecked(bool(v))
             elif isinstance(wd, QtWidgets.QComboBox):
                 i = wd.findText(str(v))
-                wd.setCurrentIndex(i if i >= 0 else 0)
+                if i >= 0:
+                    wd.setCurrentIndex(i)
+                elif wd.isEditable():
+                    wd.setEditText(str(v))
+                else:
+                    wd.setCurrentIndex(0)
             elif isinstance(wd, QtWidgets.QDoubleSpinBox):
                 wd.setValue(float(v))
             elif isinstance(wd, QtWidgets.QSpinBox):
@@ -1168,6 +1215,56 @@ class EveApp(QtWidgets.QMainWindow):
     def mode(self) -> str:
         b = self.mode_group.checkedButton()
         return b.property("mode") if b is not None else "bench"
+
+    def _refresh_ports(self) -> None:
+        from .keyer import list_serial_ports
+        pc = self.w["keyer_port"]
+        keep = pc.currentText()
+        pc.blockSignals(True)
+        pc.clear()
+        for d in list_serial_ports():
+            pc.addItem(d)
+        if keep:
+            i = pc.findText(keep)
+            if i >= 0:
+                pc.setCurrentIndex(i)
+            else:
+                pc.setEditText(keep)
+        pc.blockSignals(False)
+
+    def _keyer_changed(self) -> None:
+        k = KEYER_KINDS.get(self.w["keyer_kind"].currentText(), "none")
+        usb = k == "usb_relay"
+        self.w["keyer_port"].setEnabled(usb)
+        self.w["keyer_channel"].setEnabled(usb)
+        self.btn_testkey.setEnabled(usb)
+        self.lbl_keyer.setText({"none": "No key line: fine for the loopback bench, simulation, and receive only.",
+                                "gpio": "B210 J504 GPIO_0 (the pin marked 0 on the clone) through an isolated driver.",
+                                "usb_relay": "LCUS-type USB relay board: relay contact COM/NO across the sequencer's key input; "
+                                             "docs/hardware/usb_relay_keyer.md."}.get(k, ""))
+
+    def _test_key(self) -> None:
+        from .keyer import UsbRelayKeyer
+        port = self.w["keyer_port"].currentText().split()[0] if self.w["keyer_port"].currentText().strip() else ""
+        if not port:
+            self.status.setText("choose the relay board's COM port first")
+            return
+        try:
+            k = UsbRelayKeyer(port, int(self.w["keyer_channel"].value()))
+            k.log = self._log
+            k.open()
+            self._log(f"test key on {port}: status {k.query()!r}")
+            k.key(True)
+            self._log("key DOWN (1 s)")
+            QtWidgets.QApplication.processEvents()
+            time.sleep(1.0)
+            k.key(False)
+            self._log(f"key up; status {k.query()!r}; fault: {k.fault or 'none'}")
+            k.close()
+            self.status.setText(f"test key on {port}: {'FAULT ' + k.fault if k.fault else 'ok'}")
+        except Exception as e:      # noqa: BLE001
+            self._log(f"test key failed: {e}")
+            self.status.setText(f"test key failed: {e}")
 
     def _reference_changed(self) -> None:
         ext = self.w["clock"].currentText() == "external" and self.mode() != "sim"
@@ -1244,6 +1341,8 @@ class EveApp(QtWidgets.QMainWindow):
             if self.w["repeat"].value() < 2:
                 self.w["repeat"].setValue(5)
                 notes.append("repeat 5")
+        if m in ("eme", "eve") and self.w["keyer_kind"].currentText() == "none":
+            notes.append("NO KEY LINE selected: the sequencer will not be keyed (fine only for the bare-B210 EME test)")
         if m == "bench" and self.w["tx_gain"].value() > 20.0:
             self.w["tx_gain"].setValue(0.0)
             notes.append("TX gain 0 dB (loopback needs none)")
@@ -1276,8 +1375,10 @@ class EveApp(QtWidgets.QMainWindow):
         radio = m != "sim"
         for key in ("serial", "tx_gain", "rx_gain", "clock", "time_host", "gpsdo", "lo_offset_khz"):
             self.w[key].setEnabled(radio)
+        self.w["keyer_kind"].setEnabled(radio)
         self._symbol_changed()
         self._reference_changed()
+        self._keyer_changed()
         if user:
             self._coherence()
         else:

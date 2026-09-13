@@ -44,3 +44,5 @@ dependencies:
     # renders the session report PDF inside the application (eve/app.py); the conda
     # PySide6 build has no working QtPdfWidgets on Windows
     - pymupdf
+    # USB relay keyer (LCUS-type CH340 serial relay boards) - eve/keyer.py
+    - pyserial

@@ -189,7 +189,17 @@ class Runner:
 
             from .station import Session, SessionOptions
             opts = SessionOptions(out_dir=str(archive), live_decode=True, **opts_kw)
-            sess = Session(sched, model, radio, opts, log=self.say)
+            from . import keyer as _keyer
+            kind = {"B210 GPIO": "gpio", "USB relay board": "usb_relay", "gpio": "gpio", "usb_relay": "usb_relay"}.get(cfg.get("keyer_kind", "none"), "none")
+            if mode == "sim" and kind == "gpio":
+                kind = "none"
+            if kind == "usb_relay":
+                self.send(("state", "opening the USB relay keyer"))
+            key = _keyer.make_keyer(kind, radio=radio, port=cfg.get("keyer_port", ""),
+                                    channel=int(cfg.get("keyer_channel", 1)), log=self.say)
+            key.open()                      # fails here, before any RF, if the port is wrong
+            self.say(f"key line: {key.name}")
+            sess = Session(sched, model, radio, opts, log=self.say, keyer=key)
             probs = sess.preflight()
             if probs:
                 raise RuntimeError("preflight failed: " + "; ".join(probs))
@@ -213,6 +223,10 @@ class Runner:
             finally:
                 stop.set()
                 self.phase("last chunk done: draining and closing the archive")
+                try:
+                    sess.keyer.close()
+                except Exception:
+                    pass
                 sess.release()
                 if radio is not None:
                     self.phase("closing the radio")
@@ -256,7 +270,7 @@ class Runner:
         g_absent = False
         n = 0
         while not stop.is_set():
-            d = {"phase": sess.phase, "keyed": bool(getattr(radio, "keyed", False))}
+            d = {"phase": sess.phase, "keyed": bool(sess.keyer.keyed), "key_text": sess.keyer.status_text()}
             try:
                 if hasattr(radio, "status") and n % 4 == 0:
                     st = radio.status()
