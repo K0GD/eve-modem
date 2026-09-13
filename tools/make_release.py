@@ -177,7 +177,7 @@ def build_zip(st: Path, dist: Path) -> Path:
         assert tops == {st.name}, tops
     h = hashlib.sha256(zpath.read_bytes()).hexdigest()
     side = dist / f"{st.name}.sha256"
-    side.write_text(f"{h}  {zpath.name}\n", encoding="ascii")
+    side.write_bytes(f"{h}  {zpath.name}\n".encode("ascii"))   # bytes: no CRLF on Windows (shasum -c needs LF)
     print(f"wrote {zpath} ({zpath.stat().st_size / 1e6:.1f} MB, {len(names)} entries, sha256 {h[:12]}...)")
     print(f"wrote {side}")
     return zpath

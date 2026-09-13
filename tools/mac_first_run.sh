@@ -53,7 +53,7 @@ say "downloading $ZIP and $SHA to $DL"
 curl -fSL --progress-bar -o "$DL/$ZIP" "$BASE/$ZIP"
 curl -fsSL -o "$DL/$SHA" "$BASE/$SHA"
 say "verifying"
-( cd "$DL" && shasum -a 256 -c "$SHA" )
+( cd "$DL" && tr -d '\r' < "$SHA" > "$SHA.lf" && shasum -a 256 -c "$SHA.lf" && rm -f "$SHA.lf" )
 
 # 4. unzip ----------------------------------------------------------------------
 if [ -d "$DEST/eve-modem-$VER" ]; then
