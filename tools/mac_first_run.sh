@@ -42,24 +42,34 @@ fi
 
 # 1. the environment ---------------------------------------------------------
 usable() { [ -n "${1:-}" ] && [ -x "$1/bin/python" ] && "$1/bin/python" -c "import gnuradio, PySide6" >/dev/null 2>&1; }
-ENV_DIR=""
-if [ -n "${EVE_PYTHON:-}" ]; then ENV_DIR="$(dirname "$(dirname "$EVE_PYTHON")")"; fi
-for c in "${ENV_DIR}" "${RADIOCONDA_ROOT:-}" "${CONDA_PREFIX:-}" "$HOME/radioconda" "/opt/radioconda" "$HOME/miniforge3/envs/radioconda"; do
-    if usable "$c"; then ENV_DIR="$c"; break; fi
-done
-if [ -z "$ENV_DIR" ]; then
-    echo "No radioconda with GNU Radio and PySide6 found (looked in ~/radioconda, /opt/radioconda," >&2
-    echo "RADIOCONDA_ROOT, CONDA_PREFIX, EVE_PYTHON). Install radioconda first:" >&2
-    echo "  https://github.com/ryanvolz/radioconda/releases   (macOS arm64 installer)" >&2
+PY=""
+if [ -n "${EVE_PYTHON:-}" ] && [ -x "$EVE_PYTHON" ] && "$EVE_PYTHON" -c "import gnuradio, PySide6" >/dev/null 2>&1; then
+    PY="$EVE_PYTHON"
+else
+    for c in "${RADIOCONDA_ROOT:-}" "${CONDA_PREFIX:-}" "$HOME/radioconda" "/opt/radioconda" "$HOME/miniforge3/envs/radioconda"; do
+        if usable "$c"; then PY="$c/bin/python"; break; fi
+    done
+fi
+if [ -z "$PY" ] && command -v python3 >/dev/null && python3 -c "import gnuradio, PySide6" >/dev/null 2>&1; then
+    PY="$(command -v python3)"          # a distribution GNU Radio (apt) with PySide6 installed
+    SYSTEM_PY=1
+fi
+if [ -z "$PY" ]; then
+    echo "No Python with GNU Radio and PySide6 found (looked in ~/radioconda, /opt/radioconda," >&2
+    echo "RADIOCONDA_ROOT, CONDA_PREFIX, EVE_PYTHON, and python3 on PATH). Install radioconda first:" >&2
+    echo "  https://github.com/ryanvolz/radioconda/releases   (pick your OS and CPU)" >&2
     echo "then run this script again." >&2
     exit 1
 fi
-PY="$ENV_DIR/bin/python"
-say "using $ENV_DIR ($("$PY" -c 'import sys; print(sys.version.split()[0])'))"
+say "using $PY ($("$PY" -c 'import sys; print(sys.version.split()[0])'))"
 
 # 2. the extras ----------------------------------------------------------------
 say "adding the pip extras: $EXTRAS"
-"$PY" -m pip install --quiet $EXTRAS
+if [ -n "${SYSTEM_PY:-}" ]; then
+    "$PY" -m pip install --quiet --user --break-system-packages $EXTRAS 2>/dev/null || "$PY" -m pip install --quiet --user $EXTRAS
+else
+    "$PY" -m pip install --quiet $EXTRAS
+fi
 "$PY" -c "import galois, sigmf, hid, pymupdf, serial, astropy, jplephem; print('extras import OK')"
 
 # 3. download + verify ----------------------------------------------------------

@@ -11,7 +11,6 @@ usable() { [ -n "${1:-}" ] && [ -x "$1/bin/python" ] && "$1/bin/python" -c "impo
 
 find_env() {
     if [ -d "$here/.conda" ] && usable "$here/.conda"; then printf '%s' "$here/.conda"; return 0; fi
-    if [ -n "${EVE_PYTHON:-}" ]; then printf '%s' "$(dirname "$(dirname "$EVE_PYTHON")")"; return 0; fi
     if [ -n "${RADIOCONDA_ROOT:-}" ] && usable "$RADIOCONDA_ROOT"; then printf '%s' "$RADIOCONDA_ROOT"; return 0; fi
     if [ -n "${CONDA_PREFIX:-}" ] && usable "$CONDA_PREFIX"; then printf '%s' "$CONDA_PREFIX"; return 0; fi
     for c in "$HOME/radioconda" "/opt/radioconda" "$HOME/miniforge3/envs/radioconda" "$HOME/radioconda/envs/dses-eve"; do
@@ -20,8 +19,12 @@ find_env() {
     return 1
 }
 
-ENV_DIR="$(find_env)" || { echo "No Python environment with GNU Radio and PySide6 found. Install radioconda or create ./.conda from environment.yml." >&2; exit 1; }
-PY="$ENV_DIR/bin/python"
+if [ -n "${EVE_PYTHON:-}" ] && [ -x "$EVE_PYTHON" ]; then
+    PY="$EVE_PYTHON"                    # an explicit interpreter (conda env or system python3)
+else
+    ENV_DIR="$(find_env)" || { echo "No Python environment with GNU Radio and PySide6 found. Install radioconda, or create ./.conda from environment.yml, or set EVE_PYTHON to a python that imports gnuradio and PySide6." >&2; exit 1; }
+    PY="$ENV_DIR/bin/python"
+fi
 case "$(uname)" in
     Darwin) LOG_DIR="$HOME/Library/Logs/DSES_EVE_Modem" ;;
     *)      LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dses-eve-modem" ;;
