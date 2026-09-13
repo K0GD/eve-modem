@@ -24,6 +24,16 @@ Help → Operator's guide (F1) shows `docs/DSES_EVE_Modem_Operators_Guide.md`; t
 file builds `docs/DSES_EVE_Modem_Operators_Guide.pdf` (build_docs.ps1 builds both documents).
 The command-line tools in `tools/` do the same work for scripts.
 
+## Distribution and updates
+
+`make-release.ps1` / `make-release.sh` (both call `tools/make_release.py`) build
+`dist/eve-modem-<version>.zip` with its `.sha256` sidecar: one forward-slash zip for
+Windows, macOS, and Linux, with the Workbench's `dses_radio.py` bundled. Releases are
+published to `https://gpstime.com/sw_distribution/eve-modem/` with a `manifest.json`;
+the program checks it at start-up and on Help → Check for updates, and installs
+verified updates over itself. Procedure: `docs/Release_Workflow.md`;
+`tools/verify_release.py` checks a published release the way the updater will.
+
 ## Layout
 
 - `docs/DSES_EVE_Modem_Design_and_ICD.md` — the design description and

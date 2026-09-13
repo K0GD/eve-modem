@@ -55,6 +55,14 @@ Double-click the **DSES EVE Modem** desktop icon (created once with
 status bar shows where the settings file is. If the program does not start, the log is
 in `%LOCALAPPDATA%\DSES\EVE_Modem\app.log`.
 
+**Updates.** Once a day at start-up, and whenever you choose Help → Check for updates…,
+the program asks gpstime whether a newer version is published. A newer one opens a
+window with the release notes; **Install Update** downloads it, checks its SHA-256
+against the published sidecar, and installs it over this copy (a backup is kept) or as a
+new copy beside it, then offers a restart. Nothing is changed before the checksum
+matches, and nothing is installed while a run is in progress. Skip this version or
+Remind me later do what they say.
+
 ![Setup tab](figures/app_setup.png)
 
 # 4. The Setup tab

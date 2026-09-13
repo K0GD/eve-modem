@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=DSES EVE Modem
+Comment=Earth-Venus-Earth modem: bench, EME, and Venus sessions
+Exec=bash "%INSTALL_DIR%/launcher.sh"
+Icon=%INSTALL_DIR%/icons/eve_modem.png
+Terminal=false
+Categories=Science;HamRadio;

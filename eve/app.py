@@ -209,6 +209,9 @@ class Settings:
         "interop_dir": "Transmit only (the partner receives)", "interop_chunk_s": 300.0, "interop_search_frames": 30,
         "report_zoom": 100,
         "keyer_kind": "none", "keyer_port": "", "keyer_channel": 1,
+        # updates (the Workbench way): a manifest on gpstime, checked at start-up at most once a day
+        "manifest_url": "https://gpstime.com/sw_distribution/eve-modem/manifest.json", "auto_check": True,
+        "check_interval_hours": 24, "last_check_iso": "", "dismissed_version": "",
     }
 
     def __init__(self):
@@ -763,6 +766,9 @@ class EveApp(QtWidgets.QMainWindow):
         a = helpm.addAction("Design description and ICD (PDF)")
         a.triggered.connect(lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(DESIGN_PDF))))
         helpm.addSeparator()
+        a = helpm.addAction("Check for updates…")
+        a.triggered.connect(self._check_updates_manual)
+        helpm.addSeparator()
         a = helpm.addAction("About")
         a.triggered.connect(lambda: QtWidgets.QMessageBox.about(
             self, "DSES EVE modem",
@@ -787,6 +793,9 @@ class EveApp(QtWidgets.QMainWindow):
             self.restoreGeometry(geo)
         else:
             self.resize(1320, 880)
+        self._update_dialog = None
+        self._installer = None
+        self._start_update_check()
 
     # ---- setup tab ----------------------------------------------------------------------
     def _build_setup(self) -> QtWidgets.QWidget:
@@ -1466,6 +1475,103 @@ class EveApp(QtWidgets.QMainWindow):
     def _redecode(self, session_json: Path) -> None:
         if not self.ctl.redecode(session_json):
             self.status.setText("busy")
+
+    # ---- updates (Help menu; eve/update_ui.py) --------------------------------------------
+    def _start_update_check(self) -> None:
+        from . import update_ui as U
+        self._update_checker = U.UpdateChecker(self.settings, parent=self)
+        self._update_checker.update_available.connect(self._show_update_dialog)
+        if not self.settings.get("auto_check") or not str(self.settings.get("manifest_url")).strip():
+            return
+        last = str(self.settings.get("last_check_iso")).strip()
+        if last:
+            try:
+                from datetime import datetime
+                if (datetime.now() - datetime.fromisoformat(last)).total_seconds() < max(1, int(self.settings.get("check_interval_hours"))) * 3600:
+                    return
+            except ValueError:
+                pass
+        QtCore.QTimer.singleShot(2500, self._update_checker.check_now)
+
+    def _check_updates_manual(self) -> None:
+        from . import update_ui as U
+        url = str(self.settings.get("manifest_url")).strip()
+        if not url:
+            QtWidgets.QMessageBox.information(self, "Updates", f"No manifest URL is set (manifest_url in {self.settings.path}).")
+            return
+        chk = U.UpdateChecker(self.settings, parent=self)
+        chk.update_available.connect(self._show_update_dialog)
+        chk.no_update.connect(lambda latest: QtWidgets.QMessageBox.information(
+            self, "Updates", f"You are running {__version__}; the published version is {latest}. Nothing to do."))
+        chk.check_failed.connect(lambda msg: QtWidgets.QMessageBox.warning(self, "Update check failed", msg))
+        self._manual_checker = chk
+        self.status.setText("checking for updates …")
+        chk.check_now()
+
+    def _show_update_dialog(self, latest: str, url: str, notes: str) -> None:
+        from . import update_ui as U
+        dismissed = str(self.settings.get("dismissed_version")).strip()
+        if dismissed and U.parse_version(latest) <= U.parse_version(dismissed) and self.sender() is getattr(self, "_update_checker", None):
+            return
+        dlg = U.UpdateNotificationDialog(latest, url, notes, parent=self)
+        dlg.dismissed_for_version.connect(lambda v: (self.settings.set("dismissed_version", v), self.settings.sync()))
+        dlg.install_requested.connect(self._install_update)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+        self._update_dialog = dlg
+        self.status.setText(f"update {latest} available")
+
+    def _install_update(self, download_url: str, latest: str) -> None:
+        from . import update_ui as U
+        if not download_url:
+            return
+        if self.ctl.busy:
+            QtWidgets.QMessageBox.information(self, "Updates", "A run is in progress; install the update after it ends.")
+            return
+        install_dir = Path(__file__).resolve().parents[1]
+        choose = U.InstallUpdateDialog(install_dir, latest, parent=self)
+        if choose.exec() != QtWidgets.QDialog.Accepted:
+            return
+        mode, dest, make_shortcut = choose.result_choice()
+        prog = QtWidgets.QProgressDialog("Preparing…", "", 0, 0, self)
+        prog.setWindowTitle("Installing the update")
+        prog.setCancelButton(None)
+        prog.setWindowModality(QtCore.Qt.WindowModal)
+        prog.setMinimumDuration(0)
+        prog.setAutoClose(False)
+        prog.setAutoReset(False)
+        inst = U.UpdateInstaller(download_url, mode, dest, make_shortcut, latest, parent=self)
+
+        def on_progress(done_b, total_b):
+            if total_b > 0:
+                prog.setMaximum(total_b)
+                prog.setValue(done_b)
+            else:
+                prog.setRange(0, 0)
+        inst.status.connect(prog.setLabelText)
+        inst.progress.connect(on_progress)
+        inst.done.connect(lambda ok, msg, path: self._on_install_done(ok, msg, mode, install_dir, prog))
+        self._installer = inst
+        self._install_progress = prog
+        prog.show()
+        inst.start()
+
+    def _on_install_done(self, ok: bool, msg: str, mode: str, install_dir: Path, prog) -> None:
+        from . import update_ui as U
+        prog.close()
+        if not ok:
+            QtWidgets.QMessageBox.critical(self, "Update failed", f"{msg}\n\nThe current installation was left unchanged.")
+            return
+        if mode == "in_place":
+            r = QtWidgets.QMessageBox.question(self, "Update installed",
+                                               "The update was installed over the current version.\n\nRestart now to use it?",
+                                               QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No, QtWidgets.QMessageBox.Yes)
+            if r == QtWidgets.QMessageBox.Yes:
+                U.relaunch(install_dir)
+                self.close()
+        else:
+            QtWidgets.QMessageBox.information(self, "Update installed", msg)
 
     def _help(self) -> None:
         if self._help_dlg is None:
