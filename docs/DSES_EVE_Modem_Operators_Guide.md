@@ -40,7 +40,7 @@ the program.
 |---|---|
 | B210 | On a USB 3 port of the PC (a direct rear port, not the powered extension cable). It appears in Device Manager under "USRPs". After a power event that leaves it unrecognized, unplug USB and the DC barrel for 15 s (a true cold start). |
 | GPS reference clock (Leo Bodnar) | OUT1 to the B210 **REF IN** (10 MHz). OUT2 to the B210 **PPS IN** (with output 2 disabled the OUT2 connector carries the 1 PPS; the program sets this). USB to the PC. GPS antenna with a clear sky view. Both LEDs steady after a few minutes = locked. |
-| Key line | B210 header J504, **pin 1 (GPIO_0)** and a **ground pin (9 or 10)**, 3.3 V logic, through the isolated driver to the sequencer. On the clone with the case connector: pin "1" and a "G". Never straight to the sequencer input. |
+| Key line | B210 header J504, **pin 1 (GPIO_0)** and a **ground pin (9 or 10)**, 3.3 V logic, through the isolated driver to the sequencer. On the DSES clone the front-panel IO connector is a white 2x5 shrouded header (2.54 mm pitch, mates with a standard 10-pin IDC ribbon socket or 2.54 mm Dupont leads) whose legend gives the GPIO numbers: top row G 6 4 2 0, bottom row G 7 5 3 1. The key line is the pin marked **0** (GPIO_0) with either **G**. Never straight to the sequencer input. |
 | Transmit | B210 **TX/RX A** to the driver's input pad. The B210 gives at most +8 dBm; the driver decides the TX gain setting (Setup → TX gain). |
 | Receive | LNA output (through the bandpass filter if fitted) to B210 **RX2 A**. Nothing on RX2 for the loopback bench. |
 | Sequencer | LNA sequencer and LNA DC control in place; the amplifier's own interlocks armed; the 2 kW load only for the thermal test. |
