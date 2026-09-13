@@ -36,6 +36,9 @@ from .params import EveParams
 from . import doppler as D
 from . import schedule as S
 from .doppler import iso_utc
+import numpy as np
+
+from . import modem
 from .display import OperatorPanel, NAVY, TEAL, MONO, ABORT_STYLE, wrap_tooltips
 
 MODES = [("sim", "Software simulation (no radio)"),
@@ -230,283 +233,193 @@ class Settings:
 
 
 # ------------------------------------------------------------------------------------------
-# run controller: builds radio, model, schedule, session; runs; decodes; reports
+# run controller: one worker PROCESS per run (eve/worker.py); the GUI holds a proxy
 # ------------------------------------------------------------------------------------------
+class _RemoteRadio:
+    """What the operator panel asks of a radio, answered from the worker's status messages."""
+
+    def __init__(self, t_offset: float, text: str, sim: bool):
+        self.t_offset = t_offset
+        self.text = text
+        self.keyed = False
+        self.sim = sim
+
+    def device_time(self) -> float:
+        return time.time() + self.t_offset
+
+    def status_text(self) -> str:
+        return self.text
+
+
+class RemoteSession:
+    """The panel's view of a session running in the worker process: the schedule, an
+    accumulator fed by the worker's frame metrics, phase and key state, status texts."""
+
+    def __init__(self, payload: Dict, abort_fn):
+        self.sched = S.Schedule.from_dict(payload["schedule"])
+        self.p = self.sched.params
+        self.model = None
+        self.radio = _RemoteRadio(float(payload.get("t_offset", 0.0)), payload.get("radio", ""), bool(payload.get("sim")))
+        self.gps_text = payload.get("gps", "")
+        self.eph_text = ""
+        self.acc = modem.SymbolAccumulator(self.p, self.sched.frame_map())
+        self.phase = "preparing"
+        self.listeners = []
+        self.log = lambda s: None
+        self._abort = abort_fn
+
+    def abort(self, reason: str) -> None:
+        self._abort(reason)
+
+    def frame(self, k: int, metric: np.ndarray) -> None:
+        self.acc.add(k, metric)
+        for fn in self.listeners:
+            try:
+                fn(k, None, metric)
+            except Exception:
+                pass
+
+    def status(self, d: Dict) -> None:
+        self.phase = d.get("phase", self.phase)
+        self.radio.keyed = bool(d.get("keyed", False))
+        if "radio" in d:
+            self.radio.text = d["radio"]
+        if "gps" in d:
+            self.gps_text = d["gps"]
+        if "eph" in d:
+            self.eph_text = d["eph"]
+
+
 class RunController(QtCore.QObject):
     log = QtCore.Signal(str)
-    session_ready = QtCore.Signal(object)          # Session, before it runs (GUI binds the panel)
+    session_ready = QtCore.Signal(object)          # RemoteSession, before frames arrive (GUI binds the panel)
     preview_ready = QtCore.Signal(str)
     finished = QtCore.Signal(dict)                 # {"ok", "pdf", "session_id", "summary", "error"}
-    state = QtCore.Signal(str)                     # idle | preparing | running | decoding | done
-    session_done = QtCore.Signal()                 # the GUI must let go of the session (panel.unbind)
+    state = QtCore.Signal(str)                     # idle | preparing | running | decoding
+    session_done = QtCore.Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.session = None
-        self._thread: Optional[threading.Thread] = None
-        self._bound = threading.Event()
+        self.session: Optional[RemoteSession] = None
+        self.proc = None
+        self.conn = None
+        self._reader: Optional[threading.Thread] = None
         self.busy = False
-        self._released = threading.Event()
 
     # ---- public --------------------------------------------------------------------------
     def start(self, cfg: Dict, preview_only: bool = False) -> bool:
-        if self.busy:
-            return False
-        self.busy = True
-        self._bound.clear()
-        self._released.clear()
-        self._thread = threading.Thread(target=self._work, args=(dict(cfg), preview_only), name="eve-app-run", daemon=True)
-        self._thread.start()
-        return True
+        return self._launch(dict(cfg), preview_only, None)
 
     def redecode(self, session_json: Path) -> bool:
-        if self.busy:
-            return False
-        self.busy = True
-        self._thread = threading.Thread(target=self._redecode, args=(Path(session_json),), name="eve-app-decode", daemon=True)
-        self._thread.start()
-        return True
-
-    def panel_bound(self) -> None:
-        self._bound.set()
-
-    def panel_released(self) -> None:
-        self._released.set()
+        return self._launch({}, False, str(session_json))
 
     def abort(self, reason: str = "operator abort") -> None:
-        if self.session is not None:
-            self.session.abort(reason)
-
-    # ---- worker ----------------------------------------------------------------------------
-    def _say(self, s: str) -> None:
-        self.log.emit(s)
-
-    def _work(self, cfg: Dict, preview_only: bool) -> None:
-        radio = None
-        gps_text = ""
-        try:
-            self.state.emit("preparing")
-            mode = cfg["mode"]
-            p = EveParams.named(cfg["variant"])
-            if not cfg["full_symbol"]:
-                p = replace(p, n_frames=int(cfg["n_frames_test"]), pilot_frames=int(cfg["pilot_frames_test"]))
-            f_dial = float(cfg["f_dial_mhz"]) * 1e6
-            archive = Path(cfg["archive"])
-            archive.mkdir(parents=True, exist_ok=True)
-            site = D.DSES_HASWELL
-
-            # GPS clock
-            if mode != "sim" and cfg["gpsdo"] and not preview_only:
-                from . import gpsdo
-                rep = gpsdo.preflight()
-                gps_text = f"{rep['config']} | locked {rep['locked']}"
-                self._say("GPS clock: " + gps_text)
-                if not rep["locked"]:
-                    raise RuntimeError("GPS clock not locked; refusing to start")
-
-            # radio
-            if mode == "sim":
-                from .station import SimRadio
-                radio = SimRadio(p, cn0_db=float(cfg["sim_cn0"]), seed=int(cfg["sim_seed"]))
-                now = time.time()
-            elif preview_only:
-                radio = None
-                now = time.time()
-            else:
-                from .radio import EveRadio, RadioConfig
-                rc = RadioConfig(serial=cfg["serial"], f_dial_hz=f_dial, tx_gain_db=float(cfg["tx_gain"]),
-                                 rx_gain_db=float(cfg["rx_gain"]), clock_source=cfg["clock"],
-                                 time_source="host" if cfg["time_host"] else None,
-                                 require_ref_lock=(cfg["clock"] != "internal"), lo_offset_hz=float(cfg["lo_offset_khz"]) * 1e3)
-                radio = EveRadio(p, rc)
-                st = radio.open()
-                self._say(st.summary())
-                self._say(f"rate error {radio.rate_error_ppm():+.3f} ppm; PPS verify {radio.verify_pps()}")
-                now = radio.device_time()
-
-            # start time and ephemeris
-            lead = float(cfg["lead_s"])
-            if mode in ("eme", "eve", "interop") and not cfg["sky_start_now"]:
-                t_start = D.to_unix(cfg["sky_start_utc"])
-                if t_start < now + 12.0:
-                    raise RuntimeError(f"start {iso_utc(t_start, 0)} is in the past or too close; use 'start now' or a later time")
-            else:
-                t_start = now + lead
-            sid = f"{PREFIX[mode]}-{time.strftime('%Y%m%d-%H%M%S', time.gmtime(t_start))}"
-            if mode == "sim":
-                tab = D.synthetic_table("sim", site, now - 60, now + 8 * 3600, range_km=float(cfg["sim_range_km"]))
-                model = D.DopplerModel(tab)
-                table_name = ""
-            elif mode == "bench":
-                tab = D.synthetic_table("bench", site, now - 60, now + 8 * 3600, range_km=float(cfg["bench_range_km"]))
-                model = D.DopplerModel(tab)
-                table_name = ""
-            elif mode == "interop":
-                tab = D.synthetic_table("partner", site, now - 60, now + 8 * 3600, range_km=0.001)
-                model = D.DopplerModel(tab)
-                table_name = ""
-            else:
-                target = TARGET[mode]
-                table_path = archive / f"{sid}_{target}_haswell.csv"
-                self._say(f"ephemeris for {target} from {cfg['sky_source']} ...")
-                model = D.make_model(target, site, t_start - 1800, t_start + 8 * 3600, source=cfg["sky_source"],
-                                     table_path=None if preview_only else table_path, step="1 m")
-                table_name = table_path.name if not preview_only else ""
-                el = model.elevation_deg(t_start)
-                self._say(f"{target} at start: elevation {el:.1f} deg, RTT {model.rtt_s(t_start):.2f} s, "
-                          f"Doppler {model.doppler_hz(t_start, f_dial):+.1f} Hz")
-                if el < 0:
-                    raise RuntimeError(f"{target} is below the horizon at the start time (elevation {el:.1f} deg)")
-
-            # schedule
-            if mode == "sim":
-                rtt = model.rtt_s(t_start)
-                if rtt > 0.6:       # a real round trip (the Moon's 2.5 s): monostatic, transmit then listen
-                    sched = S.build_schedule(sid, "sim", model, t_start, f_dial, params=p, text=cfg["message"],
-                                             repeat_count=int(cfg["repeat"]), pilot=cfg["pilot"], chunk_s=None,
-                                             rtt_guard_s=0.1, t_off_min_s=float(cfg["bench_t_off_min"]), t_on_max_s=3600.0)
-                else:               # no round trip to speak of: chunk like the bench, receive on the transmission
-                    sched = S.build_schedule(sid, "sim", model, t_start, f_dial, params=p, text=cfg["message"],
-                                             repeat_count=int(cfg["repeat"]), pilot=cfg["pilot"],
-                                             chunk_s=float(cfg["bench_chunk_s"]), rtt_guard_s=0.0,
-                                             t_off_min_s=float(cfg["bench_t_off_min"]), t_on_max_s=3600.0, mode="bistatic_tx")
-                opts_kw = dict(pa_in_chain=False, tx_precompensate=False, rx_doppler_removal=False,
-                               start_margin_s=1.0, realtime_mode=False)
-            elif mode == "bench":
-                sched = S.build_schedule(sid, "bench", model, t_start, f_dial, params=p, text=cfg["message"],
-                                         repeat_count=int(cfg["repeat"]), pilot=cfg["pilot"], chunk_s=float(cfg["bench_chunk_s"]),
-                                         rtt_guard_s=0.0, t_off_min_s=float(cfg["bench_t_off_min"]), t_on_max_s=3600.0,
-                                         mode="bistatic_tx")
-                opts_kw = dict(pa_in_chain=False, tx_precompensate=False, rx_doppler_removal=False, start_margin_s=2.0)
-            elif mode == "interop":
-                rx_only = cfg["interop_dir"].startswith("Receive")
-                sched = S.build_schedule(sid, "partner", model, t_start, f_dial, params=p, text=cfg["message"],
-                                         repeat_count=int(cfg["repeat"]), pilot=cfg["pilot"],
-                                         chunk_s=float(cfg["interop_chunk_s"]), rtt_guard_s=0.0, t_off_min_s=0.0,
-                                         t_on_max_s=3600.0, mode="bistatic_rx" if rx_only else "bistatic_tx",
-                                         notes=("receive only: partner transmits" if rx_only else "transmit only: partner receives"))
-                opts_kw = dict(pa_in_chain=False, tx_precompensate=False, rx_doppler_removal=False,
-                               tx_enabled=not rx_only)
-            elif mode == "eme":
-                sched = S.build_schedule(sid, "moon", model, t_start, f_dial, params=p, text=cfg["message"],
-                                         repeat_count=int(cfg["repeat"]), pilot=cfg["pilot"], mode=cfg["sky_mode"],
-                                         chunk_s=float(cfg["eme_chunk_s"]), rtt_guard_s=float(cfg["eme_rtt_guard"]),
-                                         t_on_max_s=float(cfg["eme_t_on_max"]), t_off_min_s=float(cfg["eme_t_off_min"]),
-                                         doppler_table=table_name)
-                opts_kw = dict(pa_in_chain=bool(cfg["eme_pa"]), tx_precompensate=bool(cfg["sky_precomp"]),
-                               rx_doppler_removal=bool(cfg["sky_rx_doppler"]))
-            else:
-                sched = S.build_schedule(sid, "venus", model, t_start, f_dial, params=p, text=cfg["message"],
-                                         repeat_count=int(cfg["repeat"]), pilot=cfg["pilot"], mode=cfg["sky_mode"],
-                                         chunk_s=float(cfg["sky_chunk_s"]), rtt_guard_s=float(cfg["sky_rtt_guard"]),
-                                         t_on_max_s=float(cfg["sky_t_on_max"]), t_off_min_s=float(cfg["sky_t_off_min"]),
-                                         doppler_table=table_name)
-                opts_kw = dict(pa_in_chain=bool(cfg["sky_pa"]), tx_precompensate=bool(cfg["sky_precomp"]),
-                               rx_doppler_removal=bool(cfg["sky_rx_doppler"]))
-            # a chunk must hold the pilot frames plus at least two data frames, or the
-            # pilot eats the chunk (Variant B with the 2.4 s bench chunk: 3 frames, 2 pilot)
-            if sched.pilot_enabled and sched.chunks:
-                n_min = min(c.n_frames for c in sched.chunks[:-1] or sched.chunks)
-                need = p.pilot_frames + 2
-                if n_min < need:
-                    raise RuntimeError(f"a chunk of {n_min} frames cannot hold {p.pilot_frames} pilot frames plus data: "
-                                       f"use a chunk of at least {need / p.r_bw:.1f} s ({need} frames of {p.t_frame:.3f} s) "
-                                       f"or fewer pilot frames")
-            desc = S.describe(sched, model)
-            dur = sched.t_end - sched.t_start
-            desc += f"\nduration {dur / 60:.1f} min ({int(dur // 3600)}h {int(dur % 3600 // 60):02d}m); symbol {p.n_frames} frames = {p.t_sym:.1f} s; message {p.t_sym * p.n_sym / 60:.1f} min per pass"
-            if preview_only:
-                self.preview_ready.emit(desc)
-                return
-            self._say(desc)
-            sched.to_json(archive / f"{sid}.json")
-
-            from .station import Session, SessionOptions
-            opts = SessionOptions(out_dir=str(archive), live_decode=True, **opts_kw)
-            sess = Session(sched, model, radio, opts)
-            probs = sess.preflight()
-            if probs:
-                raise RuntimeError("preflight failed: " + "; ".join(probs))
-            self.session = sess
-            self.session_ready.emit(sess)
-            self._bound.wait(5.0)
-            self.state.emit("running")
+        if self.conn is not None:
             try:
-                rep = sess.run()
-            finally:
-                # order matters: blocks first (Session.release), then the panel's grip on
-                # the session, then the radio; a usrp_source that outlives close() makes
-                # the next open crash the process
-                self.session_done.emit()
-                self._released.wait(3.0)
-                sess.release()
-                self.session = None
-                if radio is not None:
-                    try:
-                        radio.close()
-                    except Exception:
-                        pass
-                    radio = None
-            self._say(f"session finished: aborted={rep.aborted} {rep.abort_reason}; chunks keyed {rep.chunks_keyed}; "
-                      f"frames sent {rep.frames_sent}; live decode {rep.live_decode}")
-            search = int(cfg["interop_search_frames"]) if mode == "interop" and cfg["interop_dir"].startswith("Receive") else 0
-            result = self._decode_and_report(archive, sched, extra={"GPS clock": gps_text} if gps_text else None, search=search)
-            result["aborted"] = rep.aborted
-            self.finished.emit(result)
-        except Exception as e:      # noqa: BLE001
-            self._say("ERROR: " + "".join(traceback.format_exception_only(type(e), e)).strip())
-            self._say(traceback.format_exc().splitlines()[-3] if traceback.format_exc() else "")
-            self.finished.emit({"ok": False, "error": str(e), "pdf": None})
-        finally:
-            if radio is not None:
+                self.conn.send(("abort", reason))
+            except Exception:
+                pass
+
+    def panel_bound(self) -> None:
+        pass
+
+    def panel_released(self) -> None:
+        pass
+
+    def close_radio(self) -> None:
+        """Nothing to hold: the radio lives and dies with the worker process."""
+        if self.proc is not None and self.proc.is_alive():
+            self.abort("window closed")
+            self.proc.join(3.0)
+            if self.proc.is_alive():
+                self.proc.terminate()
+
+    # ---- process management ----------------------------------------------------------------
+    def _launch(self, cfg: Dict, preview_only: bool, redecode: Optional[str], retry: int = 3) -> bool:
+        if self.busy:
+            return False
+        self._job = (cfg, preview_only, redecode, retry)
+        self._saw_session = False
+        import multiprocessing as mp
+        from . import worker
+        self.busy = True
+        ctx = mp.get_context("spawn")
+        parent, child = ctx.Pipe(duplex=True)
+        self.conn = parent
+        self.proc = ctx.Process(target=worker.run_job, args=(cfg, preview_only, child, redecode), name="eve-worker", daemon=True)
+        self.proc.start()
+        child.close()
+        self._reader = threading.Thread(target=self._pump, args=(parent, self.proc), name="eve-worker-reader", daemon=True)
+        self._reader.start()
+        return True
+
+    def _pump(self, conn, proc) -> None:
+        finished = None
+        try:
+            while True:
                 try:
-                    radio.close()
-                except Exception:
-                    pass
-            self.session = None
-            self.busy = False
-            self.state.emit("idle")
-
-    def _decode_and_report(self, archive: Path, sched, extra=None, search: int = 0) -> Dict:
-        from .decode import decode_archive, summarize
-        from .report import write_report
-        self.state.emit("decoding")
-        self._say("offline decode (decision of record) ...")
-        summary, windows = None, []
-        try:
-            if search == 0 and sched.mode == "bistatic_rx":
-                search = 30
-            acc, windows = decode_archive(archive, sched, log=self._say, epoch_search_frames=search)
-            summary = summarize(acc, sched)
-            c = summary["combined"]
-            self._say(f"OFFLINE DECODE: {'OK' if c['ok'] else 'FAIL'} '{c['text']}' symbols {c['symbols']} expected {c['expected']}; "
-                      f"margins dB {[round(m, 1) for m in c['margins_db']]}")
-        except Exception as e:      # noqa: BLE001
-            self._say(f"offline decode failed: {e}")
-        rep_path = archive / f"{sched.session_id}_session.json"
-        rep = json.loads(rep_path.read_text(encoding="utf-8")) if rep_path.exists() else {}
-        pdf = archive / f"{sched.session_id}_report.pdf"
-        try:
-            write_report(sched, rep, summary, windows, pdf, extra=extra)
-            self._say(f"report written: {pdf}")
-        except Exception as e:      # noqa: BLE001
-            self._say(f"report failed: {e}")
-            pdf = None
-        ok = bool(summary and summary["combined"]["ok"])
-        return {"ok": ok, "pdf": str(pdf) if pdf else None, "session_id": sched.session_id, "summary": summary}
-
-    def _redecode(self, session_json: Path) -> None:
-        try:
-            self.state.emit("decoding")
-            sched = S.Schedule.from_json(session_json)
-            result = self._decode_and_report(session_json.parent, sched)
-            self.finished.emit(result)
-        except Exception as e:      # noqa: BLE001
-            self._say(f"ERROR: {e}")
-            self.finished.emit({"ok": False, "error": str(e), "pdf": None})
+                    if not conn.poll(0.2):
+                        if not proc.is_alive():
+                            # one more look for messages that arrived with the exit
+                            while conn.poll():
+                                finished = self._handle(conn.recv()) or finished
+                            break
+                        continue
+                    msg = conn.recv()
+                except (EOFError, OSError, BrokenPipeError):     # the worker is gone (pipe ended)
+                    break
+                finished = self._handle(msg) or finished
         finally:
+            proc.join(5.0)
+            if finished is None and not self._saw_session and self._job[3] > 0 and proc.exitcode not in (0, None):
+                # the worker died while opening the radio: UHD's usrp_source constructor
+                # faults intermittently on this platform (about 1 open in 7 on the bench,
+                # 2026-09-12, nothing else on USB). Retry a few times before bothering
+                # the operator; the crashed worker leaves nothing behind.
+                cfg, preview_only, redecode, left = self._job
+                self.log.emit(f"the run worker died while opening the radio (exit code {proc.exitcode}); "
+                              f"retrying in 3 s ({left - 1} more {'try' if left - 1 == 1 else 'tries'} after this)")
+                self.busy = False
+                self.conn = None
+                time.sleep(3.0)
+                if self._launch(cfg, preview_only, redecode, retry=left - 1):
+                    return
+            if finished is None:
+                code = proc.exitcode
+                finished = {"ok": False, "pdf": None,
+                            "error": f"the run worker stopped without a result (exit code {code}); see fault.log and app.log "
+                                     f"under %LOCALAPPDATA%\\DSES\\EVE_Modem. The window is unaffected: fix the cause and Start again."}
+                self.log.emit("ERROR: " + finished["error"])
+            if self.session is not None:
+                self.session_done.emit()
+                self.session = None
             self.busy = False
+            self.conn = None
             self.state.emit("idle")
+            self.finished.emit(finished)
+
+    def _handle(self, msg) -> Optional[Dict]:
+        kind = msg[0]
+        if kind == "log":
+            self.log.emit(msg[1])
+        elif kind == "state":
+            if msg[1] != "idle":
+                self.state.emit(msg[1])
+        elif kind == "preview":
+            self.preview_ready.emit(msg[1])
+        elif kind == "session":
+            self._saw_session = True
+            self.session = RemoteSession(msg[1], self.abort)
+            self.session_ready.emit(self.session)
+        elif kind == "frame":
+            if self.session is not None:
+                self.session.frame(int(msg[1]), np.frombuffer(msg[2], dtype=np.float32))
+        elif kind == "status":
+            if self.session is not None:
+                self.session.status(msg[1])
+        elif kind == "finished":
+            return msg[1]
+        return None
 
 
 # ------------------------------------------------------------------------------------------
@@ -1405,7 +1318,7 @@ class EveApp(QtWidgets.QMainWindow):
     def _session_ready(self, sess) -> None:
         self.panel.bind(sess)
         self.ctl.panel_bound()
-        self.preview.setPlainText(S.describe(sess.sched, sess.model))
+        self.preview.setPlainText(S.describe(sess.sched))
 
     def _session_done(self) -> None:
         self.panel.unbind()          # keeps what is drawn; drops the references
@@ -1449,6 +1362,7 @@ class EveApp(QtWidgets.QMainWindow):
             self.ctl.abort("window closed")
             time.sleep(1.0)
         self._save()
+        self.ctl.close_radio()
         ev.accept()
 
 

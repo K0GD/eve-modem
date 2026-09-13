@@ -83,7 +83,7 @@ class OperatorPanel(QtWidgets.QWidget):
         self._timer.start(refresh_ms)
         self._radio_timer = QtCore.QTimer(self)
         self._radio_timer.timeout.connect(self._refresh_radio)
-        self._radio_timer.start(2000)
+        self._radio_timer.start(1000)
         self._show_idle()
 
     # ---- layout -----------------------------------------------------------------------------
@@ -442,21 +442,30 @@ class OperatorPanel(QtWidgets.QWidget):
                 txt = getattr(self.radio, "status_text", lambda: "radio")()
         except Exception as e:
             txt = f"radio status unavailable: {e}"
-        try:
-            from . import gpsdo as _gpsdo
-            g = self._gpsdo
-            if g is None and not self._gpsdo_absent:
-                try:
-                    g = self._gpsdo = _gpsdo.LeoBodnarGPSDO()
-                except Exception:
-                    self._gpsdo_absent = True
-            if g is not None:
-                st = g.status(500)
-                txt += (f"\nGPS clock {g.serial}: sat {'LOCK' if st.sat_lock else 'no lock'}, "
-                        f"PLL {'LOCK' if st.pll_lock else 'no lock'}, signal losses {st.loss_count}")
-        except Exception as e:
-            txt += f"\nGPS clock: {e}"
+        gps_remote = getattr(self.session, "gps_text", None)
+        if gps_remote is not None:
+            if gps_remote:
+                txt += "\n" + gps_remote
+        else:
+            try:
+                from . import gpsdo as _gpsdo
+                g = self._gpsdo
+                if g is None and not self._gpsdo_absent:
+                    try:
+                        g = self._gpsdo = _gpsdo.LeoBodnarGPSDO()
+                    except Exception:
+                        self._gpsdo_absent = True
+                if g is not None:
+                    st = g.status(500)
+                    txt += (f"\nGPS clock {g.serial}: sat {'LOCK' if st.sat_lock else 'no lock'}, "
+                            f"PLL {'LOCK' if st.pll_lock else 'no lock'}, signal losses {st.loss_count}")
+            except Exception as e:
+                txt += f"\nGPS clock: {e}"
         self.lbl_radio.setText(txt)
+        eph_remote = getattr(self.session, "eph_text", None)
+        if eph_remote is not None:
+            self.lbl_eph.setText(eph_remote)
+            return
         try:
             now = self.radio.device_time()
             if self.model is not None:

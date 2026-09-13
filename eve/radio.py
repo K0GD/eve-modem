@@ -97,6 +97,18 @@ class EveRadio:
 
     # ---- lifecycle -----------------------------------------------------------------------
     def open(self, set_time: bool = True) -> RadioStatus:
+        """create() then configure(). The application's worker calls the two halves
+        itself, with the GPS clock preflight in between: see create()."""
+        self.create()
+        return self.configure(self.p, self.cfg, set_time)
+
+    def create(self) -> None:
+        """Construct the USRP source and sink (one device open, about 8 s with the FPGA
+        image load). Do NOTHING on USB right before this: the constructor faulted
+        (access violation, 1 in 10) when the Leo Bodnar clock's HID handle had just
+        been closed by the preflight; libusb's enumeration and a device-change race.
+        So: create first, talk to the clock next, configure last. Never create a second
+        source for the same B210 in one process while one exists."""
         cfg = self.cfg
         if not cfg.serial:
             devs = R.find_b200_uhd()
@@ -108,10 +120,35 @@ class EveRadio:
         rate = self.p.radio_rate
         self.rx = R.UhdB200Source(cfg.serial, rate, cfg.f_dial_hz, cfg.rx_gain_db,
                                   antenna=cfg.rx_antenna, stream_args=cfg.rx_stream_args)
-        self.rx_rate = self.rx.get_actual_samp_rate()
-        self.rx_lo_ok = self.rx.set_lo_offset(cfg.lo_offset_hz)
         self.tx = R.make_usrp_sink(cfg.serial, rate, cfg.f_dial_hz, cfg.tx_gain_db,
                                    antenna=cfg.tx_antenna, lo_offset_hz=0.0)
+
+    def reconfigure(self, params: EveParams, cfg: RadioConfig, set_time: bool = True) -> RadioStatus:
+        """New waveform (rate) and settings on the open radio: the next run without a
+        second device open. The serial cannot change here."""
+        if self.rx is None or self.tx is None:
+            raise RuntimeError("radio is not open")
+        if cfg.serial and cfg.serial != self.cfg.serial:
+            raise ValueError(f"serial {cfg.serial} differs from the open radio {self.cfg.serial}: close and open")
+        cfg.serial = self.cfg.serial
+        if cfg.rx_antenna.endswith("TX/RX"):
+            raise ValueError("receive port must be an RX2 port, TX/RX belongs to the transmitter (ICD 7.1)")
+        self.p = params
+        self.cfg = cfg
+        return self.configure(params, cfg, set_time)
+
+    def configure(self, params: EveParams, cfg: RadioConfig, set_time: bool = True) -> RadioStatus:
+        rate = params.radio_rate
+        self.rx.set_samp_rate(rate)
+        self.rx.set_gain(cfg.rx_gain_db)
+        if self.rx.current_antenna != cfg.rx_antenna:
+            self.rx.set_antenna(cfg.rx_antenna)
+        self.rx.set_center_freq(cfg.f_dial_hz)
+        self.rx_lo_ok = self.rx.set_lo_offset(cfg.lo_offset_hz)
+        self.rx_rate = self.rx.get_actual_samp_rate()
+        self.tx.set_samp_rate(rate)
+        self.tx.set_gain(cfg.tx_gain_db, 0)
+        self.tx.set_antenna(cfg.tx_antenna, 0)
         self.tx_lo_ok = R.tune_with_lo_offset(self.tx, cfg.f_dial_hz, cfg.lo_offset_hz, 0, self.log)
         self.tx_rate = float(self.tx.get_samp_rate())
         # reference and time (per motherboard: one call covers both streams)
