@@ -247,7 +247,40 @@ In the archive folder, all named by the session id (mode and UTC start):
 - `<session>_session.json` — the session log (times, keying, radio, live decode).
 - `<session>_report.pdf` — the report.
 
-# 10. Command-line equivalents
+# 10. Installing on another computer
+
+The program is a zip, `eve-modem-<version>.zip`, from
+`https://gpstime.com/sw_distribution/eve-modem/` (the folder also holds this guide and
+the design document). It carries no Python: it runs on a conda environment with GNU
+Radio, UHD, PySide6, and a few pip packages, the same radioconda base the DSES Workbench
+uses. Windows, macOS, and Linux (including a Raspberry Pi 5 with the aarch64 radioconda)
+use the same zip.
+
+1. Install radioconda (https://github.com/ryanvolz/radioconda) or any conda with the
+   conda-forge channel.
+2. Unzip the release; it makes one folder `eve-modem-<version>`.
+3. In that folder create the program's environment from the included file:
+
+   ```
+   conda env create --prefix .conda -f environment.yml
+   ```
+
+   (about 3 GB; ten minutes). This installs gnuradio, uhd, numpy, scipy, astropy,
+   jplephem, pyside6, pyqtgraph, matplotlib, pytest, and the pip extras galois, sigmf,
+   hidapi, pymupdf, pyserial. On Linux the USB HID clock and the CH340 relay need the
+   usual udev permissions (a rule for USB 1dd2:2210, membership of `dialout`).
+4. Start it: Windows `launcher.bat` (or `install-shortcut.ps1` once for a desktop icon);
+   macOS `launcher.command` (or `install-shortcut.command` once for an app on the
+   Desktop); Linux `bash launcher.sh` (or `install-shortcut.command` once for a menu
+   entry). The launchers use `.conda` beside the program if it exists, else
+   `EVE_PYTHON`, `RADIOCONDA_ROOT`, `CONDA_PREFIX`, or `~/radioconda`.
+5. First run: choose **Software simulation**, press Start, and watch a message decode
+   with no hardware at all. Then the bench loopback with a B210.
+
+Updates arrive through Help → Check for updates (section 3). The B210 needs the UHD
+FPGA images (`uhd_images_downloader` in radioconda) the first time it is opened.
+
+# 11. Command-line equivalents
 
 The window drives the same code as the tools in `tools/`: `eve_session.py plan | run |
 sim`, `eve_bench.py`, `eve_decode.py`, `eve_txcw.py` (one comb tone into the lab counter),
