@@ -39,7 +39,7 @@ from .doppler import iso_utc
 import numpy as np
 
 from . import modem
-from .display import OperatorPanel, NAVY, TEAL, MONO, ABORT_STYLE, wrap_tooltips
+from .display import OperatorPanel, NAVY, TEAL, mono, ABORT_STYLE, wrap_tooltips
 
 MODES = [("sim", "Software simulation (no radio)"),
          ("bench", "Bench loopback (one B210, no antenna)"),
@@ -1110,7 +1110,7 @@ class EveApp(QtWidgets.QMainWindow):
         right.addWidget(QtWidgets.QLabel("Schedule preview"))
         self.preview = QtWidgets.QPlainTextEdit()
         self.preview.setReadOnly(True)
-        self.preview.setStyleSheet(MONO + " font-size: 11px;")
+        self.preview.setStyleSheet(mono() + " font-size: 11px;")
         right.addWidget(self.preview, 1)
         brow = QtWidgets.QHBoxLayout()
         self.btn_preview = QtWidgets.QPushButton("Preview schedule")
@@ -1133,7 +1133,7 @@ class EveApp(QtWidgets.QMainWindow):
         self.setup_log = QtWidgets.QPlainTextEdit()
         self.setup_log.setReadOnly(True)
         self.setup_log.setMaximumBlockCount(500)
-        self.setup_log.setStyleSheet(MONO + " font-size: 11px;")
+        self.setup_log.setStyleSheet(mono() + " font-size: 11px;")
         right.addWidget(self.setup_log, 1)
         # operator help on every control, and on its row label
         for key, wd in self.w.items():

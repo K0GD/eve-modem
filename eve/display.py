@@ -34,7 +34,27 @@ from . import modem
 TEAL, NAVY, GOLD = "#156082", "#0A2F40", "#B86A18"
 STRIP_ROWS = 300            # frames kept in the tone strip (~105 s of Variant A)
 STRIP_COLS = 512            # candidate bins collapsed 8:1 for display
-MONO = "font-family: 'Source Code Pro', Consolas, monospace;"
+_MONO = None
+
+
+def mono() -> str:
+    """Style-sheet fragment naming the first monospace family the platform has. Naming a
+    missing family makes Qt scan every font alias at start-up and log 'replace uses of
+    missing font family ...' (macOS has neither Source Code Pro nor Consolas). Needs the
+    QApplication, hence a function rather than a constant; the answer is cached."""
+    global _MONO
+    if _MONO is None:
+        fam = "monospace"
+        try:
+            have = set(QtGui.QFontDatabase.families())
+            for cand in ("Source Code Pro", "Consolas", "Menlo", "DejaVu Sans Mono", "Liberation Mono", "Courier New"):
+                if cand in have:
+                    fam = cand
+                    break
+        except Exception:       # noqa: BLE001
+            return "font-family: monospace;"     # no QApplication yet: do not cache
+        _MONO = "font-family: '" + fam + "', monospace;"
+    return _MONO
 ABORT_STYLE = ("QPushButton { background: #c0392b; color: white; font-weight: bold; padding: 6px; }"
                "QPushButton:disabled { background: #6e2f28; color: #c8b8b6; }")
 
@@ -98,7 +118,7 @@ class OperatorPanel(QtWidgets.QWidget):
         self._phase_kind = None
         self.set_phase("idle", "idle")
         self.lbl_clock = QtWidgets.QLabel()
-        self.lbl_clock.setStyleSheet(MONO + " font-size: 12px;")
+        self.lbl_clock.setStyleSheet(mono() + " font-size: 12px;")
         hdr = QtWidgets.QHBoxLayout()
         hdr.addWidget(self.lbl_title, 1)
         hdr.addWidget(self.lbl_phase)
@@ -145,14 +165,14 @@ class OperatorPanel(QtWidgets.QWidget):
         dv.addWidget(self.table)
         self.lbl_decode = QtWidgets.QLabel("no frames yet")
         self.lbl_decode.setWordWrap(True)
-        self.lbl_decode.setStyleSheet(MONO)
+        self.lbl_decode.setStyleSheet(mono())
         dv.addWidget(self.lbl_decode)
         rv_all.addWidget(dec_box, 3)
 
         sch_box = QtWidgets.QGroupBox("Schedule")
         sv = QtWidgets.QVBoxLayout(sch_box)
         self.lbl_sched = QtWidgets.QLabel()
-        self.lbl_sched.setStyleSheet(MONO + " font-size: 11px;")
+        self.lbl_sched.setStyleSheet(mono() + " font-size: 11px;")
         self.lbl_sched.setWordWrap(True)
         sv.addWidget(self.lbl_sched)
         self.key_lamp = QtWidgets.QLabel("KEY")
@@ -164,11 +184,11 @@ class OperatorPanel(QtWidgets.QWidget):
         rad_box = QtWidgets.QGroupBox("Radio and ephemeris")
         rv = QtWidgets.QVBoxLayout(rad_box)
         self.lbl_radio = QtWidgets.QLabel()
-        self.lbl_radio.setStyleSheet(MONO + " font-size: 11px;")
+        self.lbl_radio.setStyleSheet(mono() + " font-size: 11px;")
         self.lbl_radio.setWordWrap(True)
         rv.addWidget(self.lbl_radio)
         self.lbl_eph = QtWidgets.QLabel()
-        self.lbl_eph.setStyleSheet(MONO + " font-size: 11px;")
+        self.lbl_eph.setStyleSheet(mono() + " font-size: 11px;")
         rv.addWidget(self.lbl_eph)
         self.btn_abort = QtWidgets.QPushButton("ABORT — release key, stop")
         self.btn_abort.setStyleSheet(ABORT_STYLE)
@@ -188,7 +208,7 @@ class OperatorPanel(QtWidgets.QWidget):
         self.log = QtWidgets.QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(2000)
-        self.log.setStyleSheet(MONO + " font-size: 11px;")
+        self.log.setStyleSheet(mono() + " font-size: 11px;")
         self.log.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
         self.vsplit = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         self.vsplit.addWidget(self.hsplit)
@@ -288,7 +308,7 @@ class OperatorPanel(QtWidgets.QWidget):
             self.table.item(m, 0).setText(str(m))
             self.table.item(m, 1).setText(str(self.sched.symbols[m]))
         self.lbl_decode.setText("no frames yet")
-        self.lbl_decode.setStyleSheet(MONO)
+        self.lbl_decode.setStyleSheet(mono())
         self.spec_curve.setData([], [])
         s = self.sched
         self.lbl_title.setText(f"{s.session_id}  ·  {s.target}  ·  {s.mode}  ·  {s.f_dial_hz / 1e6:.4f} MHz  ·  "
@@ -398,7 +418,7 @@ class OperatorPanel(QtWidgets.QWidget):
                    f"BCH {'ok' if out.bch_ok else 'fail'} ({out.bits_corrected} corrected)  CRC {'ok' if out.crc_ok else 'fail'}  "
                    f"text '{out.text}'")
             self.lbl_decode.setText(txt)
-            self.lbl_decode.setStyleSheet(MONO + " font-weight: bold; color: " + ("#1e7d3a" if out.ok else "#7f2a1e") + ";")
+            self.lbl_decode.setStyleSheet(mono() + " font-weight: bold; color: " + ("#1e7d3a" if out.ok else "#7f2a1e") + ";")
         except Exception as e:
             self.lbl_decode.setText(f"decode error: {e}")
 

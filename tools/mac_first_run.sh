@@ -25,6 +25,10 @@ make_shortcut() {   # $1 = install folder
         mkdir -p "$app/icons"
         curl -fsSL -o "$app/icons/eve_modem.icns" "$BASE/eve_modem.icns" || rm -f "$app/icons/eve_modem.icns"
     fi
+    # the shortcut maker in the 1.0.0 zip predates the native icon build: take the current one
+    curl -fsSL -o "$app/install-shortcut.command.new" "$BASE/install-shortcut.command" \
+        && mv "$app/install-shortcut.command.new" "$app/install-shortcut.command" \
+        && chmod +x "$app/install-shortcut.command" || rm -f "$app/install-shortcut.command.new"
     say "making the Desktop shortcut"
     bash "$app/install-shortcut.command"
 }
