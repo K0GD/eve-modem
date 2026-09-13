@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# mac_first_run.sh - first installation of the DSES EVE modem on a Mac (or Linux box)
+# mac_first_run.sh - first installation of the DSES EVE modem on a Mac or a Linux box
 # that already has radioconda. Does the whole first-run sequence from the operator's
 # guide, section 10, so nothing has to be typed:
 #   1. find radioconda (or the env named in EVE_PYTHON / RADIOCONDA_ROOT)
@@ -75,7 +75,9 @@ say "downloading $ZIP and $SHA to $DL"
 curl -fSL --progress-bar -o "$DL/$ZIP" "$BASE/$ZIP"
 curl -fsSL -o "$DL/$SHA" "$BASE/$SHA"
 say "verifying"
-( cd "$DL" && tr -d '\r' < "$SHA" > "$SHA.lf" && shasum -a 256 -c "$SHA.lf" && rm -f "$SHA.lf" )
+# macOS has shasum (perl); Linux always has sha256sum, shasum only if perl is installed
+if command -v sha256sum >/dev/null; then CHK="sha256sum -c"; else CHK="shasum -a 256 -c"; fi
+( cd "$DL" && tr -d '\r' < "$SHA" > "$SHA.lf" && $CHK "$SHA.lf" && rm -f "$SHA.lf" )
 
 # 4. unzip ----------------------------------------------------------------------
 if [ -d "$DEST/eve-modem-$VER" ]; then
@@ -84,7 +86,11 @@ if [ -d "$DEST/eve-modem-$VER" ]; then
     mv "$DEST/eve-modem-$VER" "$DEST/eve-modem-$VER.old"
 fi
 say "unzipping into $DEST"
-unzip -q "$DL/$ZIP" -d "$DEST"
+if command -v unzip >/dev/null; then
+    unzip -q "$DL/$ZIP" -d "$DEST"
+else                                   # minimal Linux without unzip: Python does it
+    "$PY" -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$DL/$ZIP" "$DEST"
+fi
 APP="$DEST/eve-modem-$VER"
 chmod +x "$APP"/*.sh "$APP"/*.command 2>/dev/null || true
 xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
@@ -99,7 +105,12 @@ sleep 10
 if kill -0 "$LPID" 2>/dev/null; then
     say "running (pid $LPID)"
     make_shortcut "$APP"
-    say "done. Quit the program window when you are finished; from now on start it from the Desktop app."
+    if [ "$(uname)" = "Darwin" ]; then
+        say "done. Quit the program window when you are finished; from now on start it from the Desktop app."
+    else
+        say "done. The program is in the applications menu (Science) and on the Desktop; some desktops"
+        echo "   ask once to 'Allow Launching' a Desktop file (right-click it)."
+    fi
 else
     case "$(uname)" in Darwin) LOG="$HOME/Library/Logs/DSES_EVE_Modem/app.log" ;; *) LOG="${XDG_STATE_HOME:-$HOME/.local/state}/dses-eve-modem/app.log" ;; esac
     say "the program exited within 10 s; last lines of $LOG:"

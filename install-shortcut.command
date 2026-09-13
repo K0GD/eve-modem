@@ -76,8 +76,20 @@ EOF
         entry="$HOME/.local/share/applications/dses-eve-modem.desktop"
         mkdir -p "$(dirname "$entry")"
         sed "s|%INSTALL_DIR%|$here|g" "$here/eve-modem.desktop" > "$entry"
+        # A menu-launched program inherits no shell variables: bake in the Python this
+        # run was pointed at (EVE_PYTHON / RADIOCONDA_ROOT), if any.
+        envs=""
+        [ -n "${EVE_PYTHON:-}" ] && envs="$envs EVE_PYTHON=$EVE_PYTHON"
+        [ -n "${RADIOCONDA_ROOT:-}" ] && envs="$envs RADIOCONDA_ROOT=$RADIOCONDA_ROOT"
+        [ -n "$envs" ] && sed -i "s|^Exec=|Exec=env$envs |" "$entry"
         chmod +x "$entry"
-        if [ -d "$HOME/Desktop" ]; then cp "$entry" "$HOME/Desktop/dses-eve-modem.desktop"; chmod +x "$HOME/Desktop/dses-eve-modem.desktop"; fi
+        command -v update-desktop-database >/dev/null && update-desktop-database "$(dirname "$entry")" 2>/dev/null || true
+        if [ -d "$HOME/Desktop" ]; then
+            cp "$entry" "$HOME/Desktop/dses-eve-modem.desktop"
+            chmod +x "$HOME/Desktop/dses-eve-modem.desktop"
+            # GNOME/Cinnamon: mark the Desktop copy trusted so it launches without a prompt
+            command -v gio >/dev/null && gio set "$HOME/Desktop/dses-eve-modem.desktop" metadata::trusted true 2>/dev/null || true
+        fi
         echo "Created: $entry"
         ;;
 esac
