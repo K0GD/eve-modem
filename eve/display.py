@@ -95,7 +95,8 @@ class OperatorPanel(QtWidgets.QWidget):
         self.lbl_title = QtWidgets.QLabel()
         self.lbl_title.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {NAVY};")
         self.lbl_phase = QtWidgets.QLabel("idle")
-        self.lbl_phase.setStyleSheet(f"font-size: 15px; font-weight: bold; color: white; background: {TEAL}; padding: 3px 8px; border-radius: 3px;")
+        self._phase_kind = None
+        self.set_phase("idle", "idle")
         self.lbl_clock = QtWidgets.QLabel()
         self.lbl_clock.setStyleSheet(MONO + " font-size: 12px;")
         hdr = QtWidgets.QHBoxLayout()
@@ -222,7 +223,10 @@ class OperatorPanel(QtWidgets.QWidget):
                                   "Use it for any fault: reference unlock, amplifier trouble, wrong pointing. Dim = no "
                                   "session running.")
         self.log.setToolTip("The session log: controller steps, keying events, radio messages, decode results.")
-        self.lbl_phase.setToolTip("Session phase: idle, preparing, armed, TX chunk n, listening, draining, finished, aborted.")
+        self.lbl_phase.setToolTip("What the program is doing right now. Grey: idle. Amber: busy before or after the session "
+                                  "(opening the radio, GPS clock, ephemeris, schedule; then draining, closing the radio, the "
+                                  "offline decode window by window, writing the report). Teal: the session (armed, TX chunk n of N, "
+                                  "listening for chunk n). Green: DECODED. Red: NOT DECODED, ABORTED, or FAILED.")
         self.lbl_clock.setToolTip("PC clock (UTC) and the B210's device time; they agree to milliseconds when the time was set on a PPS.")
         wrap_tooltips(self)
 
@@ -236,9 +240,22 @@ class OperatorPanel(QtWidgets.QWidget):
             + ("#c0392b" if on else "#7f8c8d") + ";")
         self.key_lamp.setText("KEY DOWN — TRANSMITTING" if on else "key up")
 
+    PHASE_COLORS = {"idle": "#7f8c8d", "busy": "#B86A18", "run": TEAL, "ok": "#1e7d3a", "fail": "#c0392b"}
+
+    def set_phase(self, text: str, kind: str = "run") -> None:
+        """The operator's badge: teal while the session runs, amber while the program is
+        busy before or after it (opening the radio, decoding, writing the report), green
+        or red for the verdict, grey when idle."""
+        if kind != self._phase_kind:
+            self._phase_kind = kind
+            self.lbl_phase.setStyleSheet(f"font-size: 15px; font-weight: bold; color: white; background: "
+                                         f"{self.PHASE_COLORS.get(kind, TEAL)}; padding: 3px 8px; border-radius: 3px;")
+        if self.lbl_phase.text() != text:
+            self.lbl_phase.setText(text)
+
     def _show_idle(self):
         self.lbl_title.setText("no session")
-        self.lbl_phase.setText("idle")
+        self.set_phase("idle", "idle")
         self.lbl_sched.setText("Set up a run on the Setup tab and press Start.")
         self.lbl_eph.setText("")
         self.lbl_radio.setText("")
@@ -392,8 +409,8 @@ class OperatorPanel(QtWidgets.QWidget):
         except Exception:
             now = time.time()
         self.lbl_clock.setText(f"UTC {iso_utc(time.time(), 0)[11:19]}   device {iso_utc(now, 0)[11:19]}")
-        self.lbl_phase.setText(self.session.phase)
-        self.btn_abort.setEnabled(self.session.phase not in ("finished", "aborted"))
+        self.set_phase(self.session.phase, getattr(self.session, "phase_kind", "run"))
+        self.btn_abort.setEnabled(getattr(self.session, "phase_kind", "run") in ("run", "busy") and self.session.phase not in ("finished", "aborted"))
         self._lamp(bool(getattr(self.radio, "keyed", False)))
         lines = []
         cur = None

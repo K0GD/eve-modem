@@ -264,6 +264,7 @@ class RemoteSession:
         self.eph_text = ""
         self.acc = modem.SymbolAccumulator(self.p, self.sched.frame_map())
         self.phase = "preparing"
+        self.phase_kind = "busy"
         self.listeners = []
         self.log = lambda s: None
         self._abort = abort_fn
@@ -280,7 +281,12 @@ class RemoteSession:
                 pass
 
     def status(self, d: Dict) -> None:
-        self.phase = d.get("phase", self.phase)
+        ph = d.get("phase", self.phase)
+        self.phase = "starting the streams (arming)" if ph == "idle" else ph
+        if "kind" in d:
+            self.phase_kind = d["kind"]
+        elif "phase" in d:
+            self.phase_kind = "run"
         self.radio.keyed = bool(d.get("keyed", False))
         if "radio" in d:
             self.radio.text = d["radio"]
@@ -1338,6 +1344,8 @@ class EveApp(QtWidgets.QMainWindow):
     def _state(self, st: str) -> None:
         self.status.setText(st)
         running = st != "idle"
+        if self.ctl.session is None and st != "idle":
+            self.panel.set_phase(st, "busy")       # before the session exists (opening the radio, ephemeris, schedule)
         self.btn_start.setEnabled(not running)
         self.btn_preview.setEnabled(not running)
         self.btn_abort.setEnabled(st in ("preparing", "running"))

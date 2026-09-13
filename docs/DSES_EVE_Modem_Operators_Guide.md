@@ -135,7 +135,7 @@ writes the log. Use it for any fault. The same button is on the Run tab.
 <!-- widths: 1.6,5.1 -->
 | Panel | What a healthy run looks like |
 |---|---|
-| Phase (top right) | armed → TX chunk n of N → listening for chunk n → … → finished. |
+| Phase badge (top right) | Colored by state. Amber while the program is busy before the session (opening the radio, GPS clock, ephemeris, schedule) and after it (draining and closing the archive, closing the radio, offline decode window n of N, writing the report). Teal during the session: armed → TX chunk n of N → listening for chunk n → … Green DECODED or red NOT DECODED / ABORTED / FAILED at the end, and it stays there while the Report tab shows the result. If the badge is amber, the program is working; give the decode a few seconds per window. |
 | Clocks | UTC (PC) and device time agree to milliseconds when the time was set on a PPS. |
 | Tone strip | One bright dot per row (one tone per frame) that steps to a new column at each symbol boundary; a steady column during the pilot. The background is receiver noise. A blank strip means no signal, wrong RX gain, or the receive window is closed (between chunks). At Venus strength single frames show nothing: that is expected. |
 | Current symbol | The sum over the frames of the symbol in progress. The gold dashed line is the tone we sent; the red line is the leader. On the bench they coincide from the first frame; on Venus the peak climbs out of the noise as frames add up. |

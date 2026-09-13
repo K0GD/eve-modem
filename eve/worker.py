@@ -50,6 +50,10 @@ class Runner:
     def say(self, s: str) -> None:
         self.send(("log", s))
 
+    def phase(self, text: str, kind: str = "busy") -> None:
+        """What the operator's badge says. kind: run | busy | ok | fail."""
+        self.send(("status", {"phase": text, "kind": kind}))
+
     # ---- the job -------------------------------------------------------------------------
     def run(self, cfg: Dict, preview_only: bool = False) -> Dict:
         radio = None
@@ -208,8 +212,10 @@ class Runner:
                 rep = sess.run()
             finally:
                 stop.set()
+                self.phase("last chunk done: draining and closing the archive")
                 sess.release()
                 if radio is not None:
+                    self.phase("closing the radio")
                     try:
                         radio.close()
                     except Exception:
@@ -220,12 +226,19 @@ class Runner:
             search = int(cfg["interop_search_frames"]) if mode == "interop" and cfg["interop_dir"].startswith("Receive") else 0
             result = self.decode_and_report(archive, sched, extra={"GPS clock": gps_text} if gps_text else None, search=search)
             result["aborted"] = rep.aborted
+            if rep.aborted:
+                self.phase(f"ABORTED: {rep.abort_reason}", "fail")
+            elif result.get("ok"):
+                self.phase(f"DECODED '{result['summary']['combined']['text']}'  -  report on the Report tab", "ok")
+            else:
+                self.phase("NOT DECODED  -  report on the Report tab", "fail")
             return result
         except Exception as e:      # noqa: BLE001
             self.say("ERROR: " + "".join(traceback.format_exception_only(type(e), e)).strip())
             tb = traceback.format_exc().splitlines()
             if len(tb) >= 3:
                 self.say(tb[-3].strip())
+            self.phase(f"FAILED: {e}", "fail")
             return {"ok": False, "error": str(e), "pdf": None}
         finally:
             if radio is not None:
@@ -295,10 +308,19 @@ class Runner:
         self.send(("state", "decoding"))
         self.say("offline decode (decision of record) ...")
         summary, windows = None, []
+        n_files = len(list(Path(archive).glob(f"{sched.session_id}_*.eve.iq")))
+        done = {"n": 0}
+
+        def decode_log(s: str) -> None:
+            self.say(s)
+            if s.startswith(sched.session_id + "_"):
+                done["n"] += 1
+                self.phase(f"offline decode: window {done['n']} of {n_files}")
+        self.phase(f"offline decode: {n_files} windows to file")
         try:
             if search == 0 and sched.mode == "bistatic_rx":
                 search = 30
-            acc, windows = decode_archive(archive, sched, log=self.say, epoch_search_frames=search)
+            acc, windows = decode_archive(archive, sched, log=decode_log, epoch_search_frames=search)
             summary = summarize(acc, sched)
             c = summary["combined"]
             self.say(f"OFFLINE DECODE: {'OK' if c['ok'] else 'FAIL'} '{c['text']}' symbols {c['symbols']} expected {c['expected']}; "
@@ -308,6 +330,7 @@ class Runner:
         rep_path = archive / f"{sched.session_id}_session.json"
         rep = json.loads(rep_path.read_text(encoding="utf-8")) if rep_path.exists() else {}
         pdf = archive / f"{sched.session_id}_report.pdf"
+        self.phase("writing the report")
         try:
             write_report(sched, rep, summary, windows, pdf, extra=extra)
             self.say(f"report written: {pdf}")
