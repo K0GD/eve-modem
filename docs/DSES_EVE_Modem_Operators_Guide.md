@@ -270,6 +270,14 @@ use the same zip.
    jplephem, pyside6, pyqtgraph, matplotlib, pytest, and the pip extras galois, sigmf,
    hidapi, pymupdf, pyserial. On Linux the USB HID clock and the CH340 relay need the
    usual udev permissions (a rule for USB 1dd2:2210, membership of `dialout`).
+   **One-command version of steps 1-4 for a Mac or Linux machine that already has
+   radioconda** (adds the extras, downloads and verifies the zip, unzips into
+   `~/Applications`, starts the program, shows the log if it dies):
+
+   ```
+   curl -fsSL https://gpstime.com/sw_distribution/eve-modem/mac_first_run.sh | bash
+   ```
+
    **Lighter alternative** if the machine already runs the DSES Workbench from radioconda:
    skip the new environment and add the extras to radioconda instead, then the launcher
    finds it by itself:
