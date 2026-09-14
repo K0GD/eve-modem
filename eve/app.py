@@ -327,6 +327,27 @@ def cn0_threshold_db(variant: str, n_frames: int) -> float:
     return FULL_THRESHOLD_DB[v] + 6.5 * math.log10(n_full / max(1, int(n_frames)))
 
 
+def open_pdf(path) -> None:
+    """Open a PDF in a real viewer. On Linux the desktop's default handler for PDFs is
+    often LibreOffice Draw once LibreOffice is installed (Ubuntu 22.04 with the default
+    suite): Draw IMPORTS the file for editing with substitute fonts, so text overflows its
+    boxes and the document looks broken. Prefer a viewer that renders the embedded fonts;
+    fall back to the desktop default."""
+    path = str(Path(path).resolve())
+    if sys.platform.startswith("linux"):
+        import shutil
+        import subprocess
+        for viewer in ("evince", "okular", "xreader", "atril", "qpdfview", "zathura", "firefox"):
+            exe = shutil.which(viewer)
+            if exe:
+                try:
+                    subprocess.Popen([exe, path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return
+                except OSError:
+                    continue
+    QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(path))
+
+
 class RunController(QtCore.QObject):
     log = QtCore.Signal(str)
     session_ready = QtCore.Signal(object)          # RemoteSession, before frames arrive (GUI binds the panel)
@@ -674,7 +695,7 @@ class ReportView(QtWidgets.QWidget):
 
     def _open_external(self) -> None:
         if self.pane.current is not None and self.pane.current.exists():
-            QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(self.pane.current.resolve())))
+            open_pdf(self.pane.current)
 
     def _redecode(self) -> None:
         if self.pane.current is None:
@@ -707,11 +728,11 @@ class HelpDialog(QtWidgets.QDialog):
         row.addWidget(self.search, 1)
         b = QtWidgets.QPushButton("Open the guide PDF")
         b.setEnabled(GUIDE_PDF.exists())
-        b.clicked.connect(lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(GUIDE_PDF))))
+        b.clicked.connect(lambda: open_pdf(GUIDE_PDF))
         row.addWidget(b)
         b = QtWidgets.QPushButton("Design document PDF")
         b.setEnabled(DESIGN_PDF.exists())
-        b.clicked.connect(lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(DESIGN_PDF))))
+        b.clicked.connect(lambda: open_pdf(DESIGN_PDF))
         row.addWidget(b)
         lay.addLayout(row)
         self.view = QtWidgets.QTextBrowser()
@@ -780,9 +801,9 @@ class EveApp(QtWidgets.QMainWindow):
         a.setShortcut("F1")
         a.triggered.connect(self._help)
         a = helpm.addAction("Open the guide PDF")
-        a.triggered.connect(lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(GUIDE_PDF))))
+        a.triggered.connect(lambda: open_pdf(GUIDE_PDF))
         a = helpm.addAction("Design description and ICD (PDF)")
-        a.triggered.connect(lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(DESIGN_PDF))))
+        a.triggered.connect(lambda: open_pdf(DESIGN_PDF))
         helpm.addSeparator()
         a = helpm.addAction("Check for updates…")
         a.triggered.connect(self._check_updates_manual)

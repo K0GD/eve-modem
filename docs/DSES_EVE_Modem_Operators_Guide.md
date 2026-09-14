@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | Document | DSES EVE Modem Operator's Guide |
-| Revision | Rev B — DRAFT (program 1.0.1) |
+| Revision | Rev B — DRAFT (program 1.0.2) |
 | Date | 2026-09-14 |
 | Prepared by | Rick Hambly, K0GD, Deep Space Exploration Society |
 | Companion | DSES EVE Modem Design Description and ICD (Rev C): the why behind every setting |
@@ -252,6 +252,7 @@ about −20 dBm at RX2, so 30 to 40 dB of attenuation between two radios on the 
 | Horizons unreachable | The ephemeris source falls back to astropy with the local DE440s. The Doppler differs by up to 10 Hz at 13 cm; acceptable, but note it in the log. |
 | "the run worker died while opening the radio ... retrying" | Every run lives in its own worker process, and opening the B210 faults about one time in seven on Windows (a UHD fault, not the radio). The program retries the open up to three times by itself; the log shows each try. If all three fail, power-cycle the B210 (USB and DC off for 15 s) and Start again. The window never closes because of it. |
 | The program closes by itself | A native library crashed. Two files in the log folder (section 3) tell the story: `app.log` (everything the program printed) and `fault.log` (the traceback of a hard crash). Send both. If the B210 was left streaming by a program that was killed, power-cycle it (USB and DC off for 15 s) before the next try. |
+| A PDF (report or guide) opens in LibreOffice Draw with text spilling over the right margin (Linux) | Draw imports the PDF for editing with substitute fonts; the file is fine (the Report tab renders it with its embedded fonts). The program now opens PDFs in a viewer (Evince, Okular, Firefox) when one is installed; to fix the desktop default: `xdg-mime default org.gnome.Evince.desktop application/pdf`. |
 | The program will not start from the icon | Read `app.log` in the log folder (section 3). The project environment must exist in `.conda` next to the program. |
 
 # 9. Files a run produces
