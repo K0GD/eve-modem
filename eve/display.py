@@ -156,12 +156,17 @@ class OperatorPanel(QtWidgets.QWidget):
         self.spec_plot = pg.PlotWidget()
         self.spec_plot.setLabel("bottom", "tone index d")
         self.spec_plot.setLabel("left", "accumulated metric (dB rel. median)")
-        self.spec_plot.setTitle("current symbol: frames summed so far (gold = expected tone, red = leader)", size="9pt")
+        self.spec_plot.setTitle("current symbol: frames summed so far (yellow dashed = expected tone, red = leader)", size="9pt")
         self.spec_curve = self.spec_plot.plot(pen=pg.mkPen(TEAL, width=1))
-        self.spec_expected = pg.InfiniteLine(angle=90, pen=pg.mkPen(GOLD, width=2, style=QtCore.Qt.DashLine))
-        self.spec_decided = pg.InfiniteLine(angle=90, pen=pg.mkPen("#D55E00", width=1))
+        # The two markers were both house oranges (gold #B86A18 / vermilion #D55E00) and
+        # could not be told apart on the dark plot (Rick, 2026-09-14): yellow dashed for the
+        # expected tone, solid red plus a red dot on the peak for the leader.
+        self.spec_expected = pg.InfiniteLine(angle=90, pen=pg.mkPen("#FFD84A", width=2, style=QtCore.Qt.DashLine))
+        self.spec_decided = pg.InfiniteLine(angle=90, pen=pg.mkPen("#E53935", width=2))
+        self.spec_peak = pg.ScatterPlotItem(size=9, pen=pg.mkPen("#E53935", width=1), brush=pg.mkBrush("#E53935"))
         self.spec_plot.addItem(self.spec_expected)
         self.spec_plot.addItem(self.spec_decided)
+        self.spec_plot.addItem(self.spec_peak)
         vb.addWidget(self.spec_plot, 2)
 
         # right column: decisions, schedule, radio
@@ -241,8 +246,9 @@ class OperatorPanel(QtWidgets.QWidget):
                              "row that steps to a new column at every symbol boundary; the pilot is a steady column "
                              "before each pass. Background texture = receiver noise; adjust RX gain so it is visible "
                              "but not saturated. Nothing at all = no signal, wrong gain, or the receive window is closed.")
-        self.spec_plot.setToolTip("The metric of the symbol now in progress, summed over its frames so far. Gold "
-                                  "dashed = the tone we sent (expected); red = the current leader. At Venus strength "
+        self.spec_plot.setToolTip("The metric of the symbol now in progress, summed over its frames so far. Yellow "
+                                  "dashed = the tone we sent (expected); solid red with a dot on the peak = the current "
+                                  "leader (the two coincide when the symbol is being received right). At Venus strength "
                                   "single frames show nothing and only this sum climbs out of the noise as frames add up.")
         dec_box.setToolTip("Live decisions from the same accumulators: one row per symbol with the expected tone, the "
                            "leader so far, its margin over the runner-up in dB, and the frames summed. Green = agrees "
@@ -330,6 +336,7 @@ class OperatorPanel(QtWidgets.QWidget):
         self.lbl_decode.setText("no frames yet")
         self.lbl_decode.setStyleSheet(mono())
         self.spec_curve.setData([], [])
+        self.spec_peak.setData([], [])
         s = self.sched
         self.lbl_title.setText(f"{s.session_id}  ·  {s.target}  ·  {s.mode}  ·  {s.f_dial_hz / 1e6:.4f} MHz  ·  "
                                f"Variant {self.p.variant}  ·  '{s.text}'  ·  repeat {s.repeat_count}  ·  "
@@ -402,7 +409,9 @@ class OperatorPanel(QtWidgets.QWidget):
             self.spec_curve.setData(np.arange(self.p.m), spec)
             exp = self.sched.frame_map().tone(self._last_k)
             self.spec_expected.setPos(exp if exp != modem.OFF else -10)
-            self.spec_decided.setPos(int(np.argmax(row)))
+            lead = int(np.argmax(row))
+            self.spec_decided.setPos(lead)
+            self.spec_peak.setData([lead], [float(spec[lead])])
             self._refresh_decisions()
         self._refresh_schedule()
 
