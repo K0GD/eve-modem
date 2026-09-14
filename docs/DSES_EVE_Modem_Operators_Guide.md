@@ -129,6 +129,13 @@ and says so in the teal line under the run modes.
   compare ports on the bench: TX on B, RX on B : RX2, or RX on the TX/RX port of the
   frontend that is not transmitting. The same frontend's TX/RX for both directions is
   refused. The line under the setting says when the choice differs from the station wiring.
+  **Port isolation is not equal on the two sides.** Measured on two B210s (Workbench
+  bench, 2026-09-14): with the receiver on frontend A, the unselected port leaks into
+  the selected one at only about 5 dB (TX/RX state) to 17 dB (RX2 state); on frontend
+  B it is about 26 dB, and between the two frontends it is best of all. So a loopback
+  bench through side A shows a very strong signal (margins near 40 dB) and one
+  through side B a weak one (a few dB): both are normal. For the station this favours
+  transmitting on A and receiving on B : RX2 when the cabling allows; to be revisited.
 - **Clock source** external (the GPS clock on REF IN and PPS IN). The run refuses to
   start unless the B210 reports lock.
 - **Time**: leave host-timed unticked when the PPS is connected. Tick it only if there
@@ -251,7 +258,6 @@ about −20 dBm at RX2, so 30 to 40 dB of attenuation between two radios on the 
 | "PPS verify False" in the log | Same as above: no second PPS edge was seen. |
 | A storm of 'L' or LATE_COMMAND in the log at the start | The radio was not armed in time. Increase the lead time (15 s or more) and close other programs. |
 | 'O' or overflows in the log | The PC dropped receive samples. One short overflow at start-up is known and padded; repeated ones mean the PC is too busy: close other programs, use a direct USB 3 port. The archive records every gap. |
-| Bench margins near 40 dB with pilot contrast in the thousands; the report says "loopback level far above internal leakage" | The transmitter is feeding the receiver directly: that frontend's TX/RX and RX2 ports are shorted (failed T/R switch). Keep that frontend off the air until the board is repaired; meanwhile both TX and RX can move to the other frontend under Ports. Confirm with a signal generator into each port. |
 | Blank tone strip during a receive window | No signal or wrong RX gain. On the bench check TX gain 0 and nothing on the antenna ports; on the air check the LNA and the sequencer. |
 | Decisions wrong on the bench | Reference unlocked (frequency off), or the LO offset fell back (the radio line says so). Do not go on the air until the bench decodes. |
 | "a chunk of N frames cannot hold the pilot frames plus data" | The chunk is too short for the pilot. Variant B frames are 0.667 s, so the 2.4 s bench chunk holds three frames and two are pilot: use a chunk of 4 s or more for Variant B (the message says the minimum). |
