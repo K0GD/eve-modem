@@ -29,6 +29,6 @@ $env:PATH = (Join-Path $eve 'Library\bin') + ';' + $env:PATH
     --docx  (Join-Path $here 'DSES_EVE_Modem_Operators_Guide.docx') `
     --title 'Earth-Venus-Earth Modem' `
     --subtitle "Operator's Guide" `
-    --version 'Rev A - DRAFT' `
+    --version 'Rev B - DRAFT' `
     --header-logo $logo --force
 
