@@ -100,6 +100,23 @@ and says so in the teal line under the run modes.
 - **Symbol length**: **full length** (473 frames, 164.8 s per symbol) is the air
   interface. The **test length** (6 frames, 2.1 s) makes a whole message pass in 23 s
   for bench work. The program warns before sending a test-length signal on the air.
+  **A short symbol is a deaf symbol.** The waveform reaches 0 dB-Hz only by adding
+  473 frames; the blue line under the setting shows the C/N0 a one-pass decode needs
+  (design 2.4 model, 10 % message error rate), and it rises 6.5 dB for every factor of
+  ten fewer frames:
+
+  | Frames per symbol | Symbol | Needs C/N0 above |
+  |---|---|---|
+  | 473 (full, Variant A) | 164.8 s | −0.6 dB-Hz |
+  | 118 | 41 s | +3.0 dB-Hz |
+  | 47 | 16 s | +5.4 dB-Hz |
+  | 12 | 4.2 s | +9.5 dB-Hz |
+  | 6 (bench default) | 2.1 s | +11.7 dB-Hz |
+
+  So a software simulation at 2 dB-Hz with the 6-frame test length fails as it should;
+  test sensitivity with full length (a 30 minute pass), or set the simulation C/N0 at
+  least 3 dB above the line for the length in use. Repeat count helps: each doubling of
+  passes buys about 3 dB.
 
 ## 4.3 Radio and reference
 

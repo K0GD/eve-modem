@@ -125,8 +125,10 @@ TIPS: Dict[str, str] = {
                      "could not be applied.",
     "archive": "Folder for everything a run produces: the schedule JSON, the ephemeris CSV, the archived receive "
                "windows (.eve.iq + sidecar), the session log JSON, and the report PDF. One folder per campaign.",
-    "sim_cn0": "Carrier-to-noise density of the simulated echo in dB-Hz. The Venus design point is about 0 dB-Hz "
-               "(a message decodes with margin at 473 frames); 20 dB-Hz is an easy check of the machinery.",
+    "sim_cn0": "Carrier-to-noise density of the simulated echo in dB-Hz. The Venus design point is about 0 dB-Hz, "
+               "which the waveform reaches only at FULL symbol length (473 frames). A short TEST symbol needs far more: "
+               "the 6-frame bench length decodes above about +12 dB-Hz (the blue line under Symbol length says what "
+               "the current length needs). 20 dB-Hz is an easy check of the machinery.",
     "sim_range_km": "One-way range of the synthetic target. 375,000 km = the Moon's 2.5 s round trip (monostatic "
                     "chunking, transmit then listen). Under 100 km the run is chunked like the bench.",
     "sim_seed": "Random seed of the simulated noise; the same seed repeats a run exactly.",
@@ -307,6 +309,22 @@ class RemoteSession:
             self.gps_text = d["gps"]
         if "eph" in d:
             self.eph_text = d["eph"]
+
+
+FULL_THRESHOLD_DB = {"A": -0.6, "B": -1.7}     # design 2.4: 10 % message error, one pass, AWGN model
+
+
+def cn0_threshold_db(variant: str, n_frames: int) -> float:
+    """C/N0 (dB-Hz) at which one pass decodes with a 10 % message error rate, for a symbol of
+    `n_frames` frames. The design's chi-square model (4096 tones, noncoherent sum of the
+    frames, 11 symbols) gives -0.6 dB-Hz at 473 frames for Variant A and rises 6.5 dB per
+    decade of fewer frames (2 frames +15.5, 6 +11.7, 47 +5.4, 118 +3.0, 236 +1.2; the fit is
+    within 0.5 dB of the Monte Carlo at every point). A short TEST symbol therefore needs a
+    strong signal: the 6-frame bench length wants about +12 dB-Hz, not the 0 dB-Hz the
+    waveform is sized for. The sensitivity is bought with the 164.8 s symbol."""
+    v = "B" if str(variant).upper().startswith("B") else "A"
+    n_full = FULL_FRAMES.get(v, 473)
+    return FULL_THRESHOLD_DB[v] + 6.5 * math.log10(n_full / max(1, int(n_frames)))
 
 
 class RunController(QtCore.QObject):
@@ -1408,10 +1426,13 @@ class EveApp(QtWidgets.QMainWindow):
         v = self.w["variant"].currentText()
         p = EveParams.named(v)
         full = self.w["full_symbol"].isChecked()
-        n = FULL_FRAMES.get(v, p.n_frames) if full else int(self.w["n_frames_test"].value())
+        n_full = FULL_FRAMES.get(v, p.n_frames)
+        n = n_full if full else int(self.w["n_frames_test"].value())
         t_sym = n * p.n_fft / p.modem_rate
-        self.lbl_sym.setText(f"{n} frames per symbol = {t_sym:.1f} s; one message pass = {t_sym * p.n_sym / 60:.1f} min"
-                             + ("" if full else "   (TEST length: no on-air significance)"))
+        thr = cn0_threshold_db(v, n)
+        self.lbl_sym.setText(f"{n} frames per symbol = {t_sym:.1f} s; one message pass = {t_sym * p.n_sym / 60:.1f} min; "
+                             f"decodes above about {thr:+.1f} dB-Hz C/N0 in one pass"
+                             + ("" if full else f"   (TEST length: no on-air significance; full length {cn0_threshold_db(v, n_full):+.1f} dB-Hz)"))
         for key in ("n_frames_test", "pilot_frames_test"):
             self.w[key].setEnabled(not full)
 
