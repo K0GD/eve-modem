@@ -92,27 +92,28 @@ class SimRadio:
         whose output is the RX stream."""
         amp = self.p.amplitude
         src = tone_source
-        if self.realtime:
-            # Without a throttle the flowgraph runs as fast as the CPU allows, so the receive
-            # stream (tables, tone strip) races minutes ahead of the wall-clock schedule the
-            # keying, phase badge and schedule pane follow (seen on the Linux VM 2026-09-13).
-            # A real radio paces the stream at the sample rate; do the same here.
-            self.throttle = blocks.throttle(gr.sizeof_gr_complex, self.rate, ignore_tags=True)
-            tb.connect(tone_source, self.throttle)
-            src = self.throttle
         if rtt_s > 0:
             self.delay = blocks.delay(gr.sizeof_gr_complex, int(round(rtt_s * self.rate)))
             tb.connect(src, self.delay)
             src = self.delay
-        if self.cn0_db is None:
-            return src
-        sigma = np.sqrt(amp ** 2 / (10 ** (self.cn0_db / 10.0)) * self.rate)
-        # GR's complex Gaussian source puts `ampl` std on each component: total variance 2 ampl^2
-        noise = analog.noise_source_c(analog.GR_GAUSSIAN, sigma / np.sqrt(2.0), self.seed)
-        adder = blocks.add_cc()
-        tb.connect(src, (adder, 0))
-        tb.connect(noise, (adder, 1))
-        return adder
+        if self.cn0_db is not None:
+            sigma = np.sqrt(amp ** 2 / (10 ** (self.cn0_db / 10.0)) * self.rate)
+            # GR's complex Gaussian source puts `ampl` std on each component: total variance 2 ampl^2
+            noise = analog.noise_source_c(analog.GR_GAUSSIAN, sigma / np.sqrt(2.0), self.seed)
+            adder = blocks.add_cc()
+            tb.connect(src, (adder, 0))
+            tb.connect(noise, (adder, 1))
+            src = adder
+        if self.realtime:
+            # Without a throttle the flowgraph runs as fast as the CPU allows, so the receive
+            # stream (tables, tone strip) races minutes ahead of the wall-clock schedule the
+            # keying, phase badge and schedule pane follow (seen on the Linux VM 2026-09-13).
+            # The throttle goes LAST: the delay block emits its round-trip's worth of silence
+            # at once, so a throttle ahead of it left the stream a whole RTT early.
+            self.throttle = blocks.throttle(gr.sizeof_gr_complex, self.rate, ignore_tags=True)
+            tb.connect(src, self.throttle)
+            src = self.throttle
+        return src
 
     def status_text(self) -> str:
         return f"SimRadio: rate {self.rate:.2f} S/s, C/N0 {self.cn0_db} dB-Hz"
