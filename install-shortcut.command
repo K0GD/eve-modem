@@ -89,6 +89,7 @@ EOF
             chmod +x "$HOME/Desktop/dses-eve-modem.desktop"
             # GNOME/Cinnamon: mark the Desktop copy trusted so it launches without a prompt
             command -v gio >/dev/null && gio set "$HOME/Desktop/dses-eve-modem.desktop" metadata::trusted true 2>/dev/null || true
+            touch "$HOME/Desktop/dses-eve-modem.desktop"     # the desktop rereads the flag only on a file change
         fi
         echo "Created: $entry"
         ;;
