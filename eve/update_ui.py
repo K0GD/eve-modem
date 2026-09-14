@@ -82,11 +82,21 @@ class UpdateChecker(QtCore.QObject):
         url = str(self.settings.get("manifest_url")).strip()
         if not url:
             return
-        try:
-            with updater.open_url(url, timeout=8, headers={"User-Agent": f"{APP_NAME}/{__version__}"}) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-        except Exception as exc:        # noqa: BLE001
-            self.check_failed.emit(friendly_check_error(exc, url))
+        # gpstime sometimes takes 10-15 s to accept the FIRST connection and is instant after
+        # that (measured 11.3 s then 0.17 s, 2026-09-14; the Workbench saw the same in 2026-09).
+        # An 8 s single try reported "urlopen error timed out" for a healthy server: allow 30 s
+        # and try twice.
+        data = None
+        last_exc = None
+        for attempt in range(2):
+            try:
+                with updater.open_url(url, timeout=30, headers={"User-Agent": f"{APP_NAME}/{__version__}"}) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                break
+            except Exception as exc:        # noqa: BLE001
+                last_exc = exc
+        if data is None:
+            self.check_failed.emit(friendly_check_error(last_exc, url))
             return
         latest = str(data.get("latest_version", "")).strip()
         download_url = str(data.get("download_url", "")).strip()
