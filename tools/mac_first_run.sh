@@ -120,6 +120,10 @@ if kill -0 "$LPID" 2>/dev/null; then
     else
         say "done. The program is in the applications menu (Science) and on the Desktop; some desktops"
         echo "   ask once to 'Allow Launching' a Desktop file (right-click it)."
+        if ! command -v evince >/dev/null && ! command -v okular >/dev/null && ! command -v xreader >/dev/null && ! command -v atril >/dev/null; then
+            echo "   No PDF viewer found: the reports and the guide open in a real viewer with"
+            echo "     sudo apt install evince      (LibreOffice Draw re-flows PDFs with substitute fonts)"
+        fi
     fi
 else
     case "$(uname)" in Darwin) LOG="$HOME/Library/Logs/DSES_EVE_Modem/app.log" ;; *) LOG="${XDG_STATE_HOME:-$HOME/.local/state}/dses-eve-modem/app.log" ;; esac

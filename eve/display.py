@@ -176,6 +176,9 @@ class OperatorPanel(QtWidgets.QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.table.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        self.table.setMinimumHeight(120)
+        self._table_follow = None
         dv.addWidget(self.table)
         self.lbl_decode = QtWidgets.QLabel("no frames yet")
         self.lbl_decode.setWordWrap(True)
@@ -315,6 +318,8 @@ class OperatorPanel(QtWidgets.QWidget):
             except queue.Empty:
                 break
         self.table.setRowCount(self.p.n_sym)
+        self._table_follow = None
+        self.table.scrollToTop()
         for m in range(self.p.n_sym):
             for c in range(6):
                 it = QtWidgets.QTableWidgetItem("")
@@ -408,6 +413,7 @@ class OperatorPanel(QtWidgets.QWidget):
         c = acc.combined()
         margins = acc.margin_db()
         ok_syms = 0
+        current = None                      # the symbol frames are arriving for right now
         for m in range(self.p.n_sym):
             row = c[m]
             n = sum(acc.count.get((r, m), 0) for r in acc.repetitions)
@@ -417,6 +423,7 @@ class OperatorPanel(QtWidgets.QWidget):
                 self.table.item(m, 4).setText("0")
                 self.table.item(m, 5).setText("waiting")
                 continue
+            current = m
             d = int(np.argmax(row))
             good = d == self.sched.symbols[m]
             ok_syms += int(good)
@@ -427,6 +434,12 @@ class OperatorPanel(QtWidgets.QWidget):
             color = QtGui.QColor("#D6F0DD") if good else QtGui.QColor("#F7D9D3")
             for col in range(6):
                 self.table.item(m, col).setBackground(color)
+        if current is not None and current != self._table_follow:
+            # keep the symbol being decided in view (the table scrolls; long messages and
+            # small windows hide the later rows otherwise)
+            self._table_follow = current
+            self.table.scrollToItem(self.table.item(min(current + 1, self.p.n_sym - 1), 0),
+                                    QtWidgets.QAbstractItemView.EnsureVisible)
         try:
             out = acc.decode()
             txt = (f"frames {acc.frames_seen}  passes {acc.repetitions}  symbols right {ok_syms}/{self.p.n_sym}  "

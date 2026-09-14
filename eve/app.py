@@ -1148,13 +1148,21 @@ class EveApp(QtWidgets.QMainWindow):
         f.addRow("", ck)
         left.addWidget(gb)
         left.addStretch(1)
+        # Entry fields: an explicit small minimum (a layout uses it instead of the widget's
+        # minimumSizeHint, which for a combo box is its widest item) and Expanding so the
+        # form shrinks with the splitter yet the fields fill the row. NOT QSizePolicy.Ignored:
+        # on macOS Qt's form layout (FieldsStayAtSizeHint) laid Ignored fields out at zero
+        # width and the Setup page showed no fields at all (1.0.2, 2026-09-14).
         for wdg in left_w.findChildren(QtWidgets.QWidget):
             if not isinstance(wdg, (QtWidgets.QLineEdit, QtWidgets.QComboBox, QtWidgets.QAbstractSpinBox)):
                 continue
+            wdg.setMinimumWidth(90)
             pol = wdg.sizePolicy()
-            pol.setHorizontalPolicy(QtWidgets.QSizePolicy.Ignored)
+            pol.setHorizontalPolicy(QtWidgets.QSizePolicy.Expanding)
             wdg.setSizePolicy(pol)
-        left_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        for form in left_w.findChildren(QtWidgets.QFormLayout):
+            form.setFieldGrowthPolicy(QtWidgets.QFormLayout.AllNonFixedFieldsGrow)   # macOS default keeps fields at size hint
+        left_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
 
         # right: preview + buttons
         right.addWidget(QtWidgets.QLabel("Schedule preview"))

@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | Document | DSES EVE Modem Operator's Guide |
-| Revision | Rev B — DRAFT (program 1.0.2) |
+| Revision | Rev B — DRAFT (program 1.0.3) |
 | Date | 2026-09-14 |
 | Prepared by | Rick Hambly, K0GD, Deep Space Exploration Society |
 | Companion | DSES EVE Modem Design Description and ICD (Rev C): the why behind every setting |
@@ -306,6 +306,13 @@ use the same zip.
 
    (Windows: `C:\ProgramData\radioconda\Scripts\pip.exe`, and set `EVE_PYTHON` or
    `RADIOCONDA_ROOT` if the launcher does not find it.)
+
+   **Linux: install a PDF viewer** if the desktop has none (Ubuntu with LibreOffice opens
+   PDFs in Draw, which re-flows them with substitute fonts). Evince is the one to have:
+
+   ```
+   sudo apt install evince
+   ```
 4. Start it: Windows `launcher.bat` (or `install-shortcut.ps1` once for a desktop icon);
    macOS `launcher.command` (or `install-shortcut.command` once for an app on the
    Desktop); Linux `bash launcher.sh` (or `install-shortcut.command` once for a menu
