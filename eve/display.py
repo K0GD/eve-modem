@@ -59,6 +59,15 @@ ABORT_STYLE = ("QPushButton { background: #c0392b; color: white; font-weight: bo
                "QPushButton:disabled { background: #6e2f28; color: #c8b8b6; }")
 
 
+def _caption(text: str) -> QtWidgets.QLabel:
+    """A wrapped explanatory line under a group title (wrapping keeps it from setting a
+    minimum width)."""
+    lbl = QtWidgets.QLabel(text)
+    lbl.setWordWrap(True)
+    lbl.setStyleSheet("color: #555; font-size: 11px;")
+    return lbl
+
+
 def wrap_tooltips(root) -> None:
     """Qt shows plain-text tooltips on one line however long; rich text wraps. Convert
     every plain tooltip under `root` (and root's own) to wrapped rich text."""
@@ -126,9 +135,13 @@ class OperatorPanel(QtWidgets.QWidget):
         outer.addLayout(hdr)
 
         # tone strip + current frame spectrum (left)
-        strip_box = QtWidgets.QGroupBox("Tone strip (frames x candidate bins, newest at top). 4096-ary FSK sends ONE tone per frame: "
-                                        "one dot per row is the whole signal")
+        # Group titles never wrap and set the box's minimum width, which set the window's
+        # minimum width (837 px) and clipped the Setup page on a small display. Keep the
+        # titles short; the explanations are wrapped captions.
+        strip_box = QtWidgets.QGroupBox("Tone strip")
         vb = QtWidgets.QVBoxLayout(strip_box)
+        vb.addWidget(_caption("Frames x candidate bins, newest at top. 4096-ary FSK sends ONE tone per frame: "
+                              "one dot per row is the whole signal."))
         self.strip_plot = pg.PlotWidget()
         self.strip_img = pg.ImageItem()
         self.strip_plot.addItem(self.strip_img)
@@ -155,8 +168,9 @@ class OperatorPanel(QtWidgets.QWidget):
         right = QtWidgets.QWidget()
         rv_all = QtWidgets.QVBoxLayout(right)
         rv_all.setContentsMargins(0, 0, 0, 0)
-        dec_box = QtWidgets.QGroupBox("Running decisions (live accumulator; the offline decode is the decision of record)")
+        dec_box = QtWidgets.QGroupBox("Running decisions")
         dv = QtWidgets.QVBoxLayout(dec_box)
+        dv.addWidget(_caption("Live accumulator; the offline decode is the decision of record."))
         self.table = QtWidgets.QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["symbol", "expected", "decided", "margin dB", "frames", "state"])
         self.table.verticalHeader().setVisible(False)
@@ -189,6 +203,7 @@ class OperatorPanel(QtWidgets.QWidget):
         rv.addWidget(self.lbl_radio)
         self.lbl_eph = QtWidgets.QLabel()
         self.lbl_eph.setStyleSheet(mono() + " font-size: 11px;")
+        self.lbl_eph.setWordWrap(True)
         rv.addWidget(self.lbl_eph)
         self.btn_abort = QtWidgets.QPushButton("ABORT — release key, stop")
         self.btn_abort.setStyleSheet(ABORT_STYLE)

@@ -58,12 +58,14 @@ class SessionOptions:
 class SimRadio:
     """Software stand-in for EveRadio: AWGN channel from TX to RX, wall-clock device time."""
 
-    def __init__(self, params: EveParams, cn0_db: Optional[float] = 20.0, rate: Optional[float] = None, seed: int = 1):
+    def __init__(self, params: EveParams, cn0_db: Optional[float] = 20.0, rate: Optional[float] = None, seed: int = 1,
+                 realtime: bool = True):
         self.p = params
         self.rate = float(rate or params.radio_rate)
         self.rx_rate = self.tx_rate = self.rate
         self.cn0_db = cn0_db
         self.seed = seed
+        self.realtime = realtime            # pace the stream at the wall clock (see build_channel)
         self.key_log: List[tuple] = []
         self._keyed = False
         self.sim = True
@@ -90,9 +92,17 @@ class SimRadio:
         whose output is the RX stream."""
         amp = self.p.amplitude
         src = tone_source
+        if self.realtime:
+            # Without a throttle the flowgraph runs as fast as the CPU allows, so the receive
+            # stream (tables, tone strip) races minutes ahead of the wall-clock schedule the
+            # keying, phase badge and schedule pane follow (seen on the Linux VM 2026-09-13).
+            # A real radio paces the stream at the sample rate; do the same here.
+            self.throttle = blocks.throttle(gr.sizeof_gr_complex, self.rate, ignore_tags=True)
+            tb.connect(tone_source, self.throttle)
+            src = self.throttle
         if rtt_s > 0:
             self.delay = blocks.delay(gr.sizeof_gr_complex, int(round(rtt_s * self.rate)))
-            tb.connect(tone_source, self.delay)
+            tb.connect(src, self.delay)
             src = self.delay
         if self.cn0_db is None:
             return src
