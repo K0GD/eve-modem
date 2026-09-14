@@ -48,6 +48,8 @@ def main(argv=None):
     ap.add_argument("--serial", default="")
     ap.add_argument("--f-dial", type=float, default=1296e6)
     ap.add_argument("--lo-offset", type=float, default=-300e3)
+    ap.add_argument("--tx-port", default="A", choices=["A", "B"], help="transmit frontend (its TX/RX port)")
+    ap.add_argument("--rx-port", default="A : RX2", help="receive port: 'A : RX2', 'B : RX2', or the other frontend's TX/RX")
     ap.add_argument("--message", default="K0PRT K0PRT")
     ap.add_argument("--archive", default="archive_bench")
     ap.add_argument("--lead", type=float, default=15.0, help="seconds from now to the first chunk (>= arm lead 8 s + margin)")
@@ -58,7 +60,8 @@ def main(argv=None):
     p = replace(EveParams.named(a.variant), n_frames=a.n_frames, pilot_frames=a.pilot_frames)
     site = D.DSES_HASWELL
     cfg = RadioConfig(serial=a.serial, f_dial_hz=a.f_dial, tx_gain_db=a.tx_gain, rx_gain_db=a.rx_gain,
-                      clock_source=a.clock, require_ref_lock=(a.clock != "internal"), lo_offset_hz=a.lo_offset)
+                      clock_source=a.clock, require_ref_lock=(a.clock != "internal"), lo_offset_hz=a.lo_offset,
+                      tx_frontend=a.tx_port, rx_antenna=a.rx_port)
     if a.gpsdo:
         from eve import gpsdo
         rep = gpsdo.preflight()

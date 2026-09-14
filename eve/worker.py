@@ -84,7 +84,8 @@ class Runner:
                 rc = RadioConfig(serial=cfg["serial"], f_dial_hz=f_dial, tx_gain_db=float(cfg["tx_gain"]),
                                  rx_gain_db=float(cfg["rx_gain"]), clock_source=cfg["clock"],
                                  time_source="host" if cfg["time_host"] else None,
-                                 require_ref_lock=(cfg["clock"] != "internal"), lo_offset_hz=float(cfg["lo_offset_khz"]) * 1e3)
+                                 require_ref_lock=(cfg["clock"] != "internal"), lo_offset_hz=float(cfg["lo_offset_khz"]) * 1e3,
+                                 tx_frontend=str(cfg.get("tx_port", "A"))[:1], rx_antenna=str(cfg.get("rx_port", "A : RX2")))
                 radio = EveRadio(p, rc)
                 self.send(("state", "opening the radio"))
                 time.sleep(2.0)                 # let the USB stack settle after the previous worker's close

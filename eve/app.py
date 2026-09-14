@@ -202,6 +202,7 @@ class Settings:
         "pilot": True, "full_symbol": False, "n_frames_test": 6, "pilot_frames_test": 2,
         "serial": "", "tx_gain": 0.0, "rx_gain": 30.0, "clock": "external", "time_host": False,
         "gpsdo": True, "lo_offset_khz": -300.0, "archive": "archive_app",
+        "tx_port": "A", "rx_port": "A : RX2",
         "bench_range_km": 0.15, "bench_chunk_s": 2.4, "bench_t_off_min": 0.5, "lead_s": 15.0,
         "sim_cn0": 20.0, "sim_range_km": 375000.0, "sim_seed": 1,
         "sky_mode": "monostatic", "sky_start_now": True, "sky_start_utc": "", "sky_chunk_s": 240.0,
@@ -394,6 +395,17 @@ class RunController(QtCore.QObject):
 
     # ---- process management ----------------------------------------------------------------
     def _launch(self, cfg: Dict, preview_only: bool, redecode: Optional[str], retry: int = 3) -> bool:
+        if self.busy and self._job is not None and self._job[1] and not self._saw_session:
+            # A preview worker is still winding down (its text is already on screen; a
+            # process with UHD and GNU Radio loaded can take many seconds to exit). Nothing
+            # is lost by ending it, so do that rather than refuse the Start after a Preview.
+            proc, reader = self.proc, self._reader
+            cfg0, po0, rd0, _ = self._job
+            self._job = (cfg0, po0, rd0, 0)          # no retries: the exit is deliberate, not a fault
+            if proc is not None and proc.is_alive():
+                proc.terminate()
+            if reader is not None:
+                reader.join(10.0)
         if self.busy:
             return False
         self._job = (cfg, preview_only, redecode, retry)
@@ -454,7 +466,8 @@ class RunController(QtCore.QObject):
             self.busy = False
             self.conn = None
             self.state.emit("idle")
-            self.finished.emit(finished)
+            if not finished.get("preview"):         # a preview has nothing to report
+                self.finished.emit(finished)
 
     def _handle(self, msg) -> Optional[Dict]:
         kind = msg[0]
@@ -943,6 +956,28 @@ class EveApp(QtWidgets.QMainWindow):
         sp.setRange(0.0, 76.0)
         sp.setSuffix(" dB")
         f.addRow("RX gain", sp)
+        prow = QtWidgets.QHBoxLayout()
+        self.w["tx_port"] = cb = QtWidgets.QComboBox()
+        cb.addItems(["A", "B"])
+        cb.setToolTip("Which of the B210's two frontends transmits (its TX/RX port). The station is wired "
+                      "to A; B is for a board with a bad side or for bench comparisons.")
+        prow.addWidget(QtWidgets.QLabel("TX frontend"))
+        prow.addWidget(cb, 1)
+        prow.addSpacing(12)
+        self.w["rx_port"] = cb = QtWidgets.QComboBox()
+        cb.addItems(["A : RX2", "B : RX2", "A : TX/RX", "B : TX/RX"])
+        cb.setToolTip("Receive frontend and port. The station's LNA feeds A : RX2 (ICD 7.1). A TX/RX port "
+                      "is accepted only on the frontend the transmitter does not use, for comparing a "
+                      "suspect RX2 port on the bench.")
+        cb.currentTextChanged.connect(lambda _t: self._ports_changed())
+        prow.addWidget(QtWidgets.QLabel("RX port"))
+        prow.addWidget(cb, 1)
+        f.addRow("Ports", prow)
+        self.w["tx_port"].currentTextChanged.connect(lambda _t: self._ports_changed())
+        self.lbl_ports = QtWidgets.QLabel("")
+        self.lbl_ports.setWordWrap(True)
+        self.lbl_ports.setStyleSheet(f"color: {TEAL};")
+        f.addRow("", self.lbl_ports)
         self.w["clock"] = cb = QtWidgets.QComboBox()
         cb.addItems(["external", "gpsdo", "internal"])
         cb.setToolTip("external = 10 MHz on REF IN and 1 PPS on PPS IN from the station reference, whichever it is "
@@ -1440,12 +1475,13 @@ class EveApp(QtWidgets.QMainWindow):
         for key in ("sky_mode", "sky_source", "sky_precomp", "sky_rx_doppler"):
             self.w[key].setEnabled(m in ("eme", "eve"))
         radio = m != "sim"
-        for key in ("serial", "tx_gain", "rx_gain", "clock", "time_host", "gpsdo", "lo_offset_khz"):
+        for key in ("serial", "tx_gain", "rx_gain", "clock", "time_host", "gpsdo", "lo_offset_khz", "tx_port", "rx_port"):
             self.w[key].setEnabled(radio)
         self.w["keyer_kind"].setEnabled(radio)
         self._symbol_changed()
         self._reference_changed()
         self._keyer_changed()
+        self._ports_changed()
         if user:
             self._coherence()
         else:
@@ -1464,6 +1500,20 @@ class EveApp(QtWidgets.QMainWindow):
                              + ("" if full else f"   (TEST length: no on-air significance; full length {cn0_threshold_db(v, n_full):+.1f} dB-Hz)"))
         for key in ("n_frames_test", "pilot_frames_test"):
             self.w[key].setEnabled(not full)
+
+    def _ports_changed(self) -> None:
+        tx = self.w["tx_port"].currentText()
+        rx = self.w["rx_port"].currentText()
+        if rx.endswith("TX/RX") and rx.startswith(tx):
+            self.lbl_ports.setText(f"Not allowed: receive on {rx} while frontend {tx} transmits. Pick an RX2 port "
+                                   f"or the other frontend's TX/RX.")
+            self.lbl_ports.setStyleSheet("color: #c0392b;")
+        elif tx != "A" or rx != "A : RX2":
+            self.lbl_ports.setText(f"TX on frontend {tx}, RX on {rx}: not the station wiring (TX/RX A to the driver, "
+                                   f"LNA to RX2 A). Fine on the bench; on the air move the cables to match.")
+            self.lbl_ports.setStyleSheet(f"color: {TEAL};")
+        else:
+            self.lbl_ports.setText("")
 
     def _browse_archive(self) -> None:
         d = QtWidgets.QFileDialog.getExistingDirectory(self, "Archive folder", self.w["archive"].text() or ".")

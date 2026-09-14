@@ -123,6 +123,12 @@ and says so in the teal line under the run modes.
 - **TX gain** 0 dB on the bench; on the air, what the driver's input pad expects.
 - **RX gain**: set so the background of the tone strip is visible but not saturated
   (30 dB on the bench, 40 to 50 dB behind the LNA).
+- **Ports**: the B210 has two frontends, A and B, each with a TX/RX and an RX2 port.
+  The station is wired TX on **A** (TX/RX A to the driver) and RX on **A : RX2** (the
+  LNA), and those are the defaults. Change them for a board with a bad side, or to
+  compare ports on the bench: TX on B, RX on B : RX2, or RX on the TX/RX port of the
+  frontend that is not transmitting. The same frontend's TX/RX for both directions is
+  refused. The line under the setting says when the choice differs from the station wiring.
 - **Clock source** external (the GPS clock on REF IN and PPS IN). The run refuses to
   start unless the B210 reports lock.
 - **Time**: leave host-timed unticked when the PPS is connected. Tick it only if there

@@ -41,10 +41,26 @@ class RadioConfig:
     require_ref_lock: bool = True       # refuse to run unless ref_locked (7.1)
     lo_offset_hz: float = -300e3
     tx_antenna: str = "TX/RX"
-    rx_antenna: str = "A : RX2"         # receiver A, RX2 port (Workbench naming)
+    tx_frontend: str = "A"              # B210 frontend for the transmitter: A or B (its TX/RX port)
+    rx_antenna: str = "A : RX2"         # receiver frontend and port (Workbench naming): "A : RX2",
+                                        # "B : RX2", or the TX/RX port of the frontend the TX does not use
     key_bank: str = "FP0"
     key_mask: int = 0x01
     rx_stream_args: str = "recv_frame_size=8192,num_recv_frames=1024"
+
+
+def check_ports(cfg: "RadioConfig") -> None:
+    """The station rule (ICD 7.1): the receiver takes an RX2 port, TX/RX belongs to the
+    transmitter. A TX/RX port is accepted for receive only on the frontend the transmitter
+    is NOT using (bench comparisons of a suspect RX2 port); the same frontend's TX/RX for
+    both directions would put the transmitter into its own receiver through the T/R switch."""
+    fe = (cfg.tx_frontend or "A").strip().upper()[:1]
+    rx = cfg.rx_antenna.strip()
+    if rx.endswith("TX/RX"):
+        rx_fe = rx.split(":")[0].strip().upper()[:1] if ":" in rx else "A"
+        if rx_fe == fe:
+            raise ValueError(f"receive on {rx} while the transmitter is on frontend {fe}: use an RX2 port, "
+                             f"or the other frontend's TX/RX (ICD 7.1)")
 
 
 @dataclass
@@ -115,13 +131,25 @@ class EveRadio:
             if not devs:
                 raise RuntimeError("no B2xx device found")
             cfg.serial = devs[0]["serial"]
-        if cfg.rx_antenna.endswith("TX/RX"):
-            raise ValueError("receive port must be an RX2 port, TX/RX belongs to the transmitter (ICD 7.1)")
+        check_ports(cfg)
         rate = self.p.radio_rate
         self.rx = R.UhdB200Source(cfg.serial, rate, cfg.f_dial_hz, cfg.rx_gain_db,
                                   antenna=cfg.rx_antenna, stream_args=cfg.rx_stream_args)
         self.tx = R.make_usrp_sink(cfg.serial, rate, cfg.f_dial_hz, cfg.tx_gain_db,
                                    antenna=cfg.tx_antenna, lo_offset_hz=0.0)
+        self._tx_frontend = "A"
+        self._set_tx_frontend(cfg.tx_frontend)
+
+    def _set_tx_frontend(self, fe: str) -> None:
+        """Route TX channel 0 to frontend A or B (B210 subdev "A:A" / "A:B"). The sink is
+        created on A; switching re-initialises the frontend, so only do it on a change."""
+        fe = (fe or "A").strip().upper()[:1]
+        if fe not in ("A", "B"):
+            raise ValueError(f"TX frontend must be A or B, not {fe!r}")
+        if fe != self._tx_frontend:
+            self.tx.set_subdev_spec(f"A:{fe}", 0)
+            self._tx_frontend = fe
+            self.log(f"TX on frontend {fe} (subdev A:{fe})")
 
     def reconfigure(self, params: EveParams, cfg: RadioConfig, set_time: bool = True) -> RadioStatus:
         """New waveform (rate) and settings on the open radio: the next run without a
@@ -131,8 +159,7 @@ class EveRadio:
         if cfg.serial and cfg.serial != self.cfg.serial:
             raise ValueError(f"serial {cfg.serial} differs from the open radio {self.cfg.serial}: close and open")
         cfg.serial = self.cfg.serial
-        if cfg.rx_antenna.endswith("TX/RX"):
-            raise ValueError("receive port must be an RX2 port, TX/RX belongs to the transmitter (ICD 7.1)")
+        check_ports(cfg)
         self.p = params
         self.cfg = cfg
         return self.configure(params, cfg, set_time)
@@ -146,6 +173,7 @@ class EveRadio:
         self.rx.set_center_freq(cfg.f_dial_hz)
         self.rx_lo_ok = self.rx.set_lo_offset(cfg.lo_offset_hz)
         self.rx_rate = self.rx.get_actual_samp_rate()
+        self._set_tx_frontend(cfg.tx_frontend)
         self.tx.set_samp_rate(rate)
         self.tx.set_gain(cfg.tx_gain_db, 0)
         self.tx.set_antenna(cfg.tx_antenna, 0)
@@ -244,7 +272,7 @@ class EveRadio:
             rx_freq=float(b.get_center_freq(0)), tx_freq=float(self.tx.get_center_freq(0)),
             rx_lo_offset_ok=self.rx_lo_ok, tx_lo_offset_ok=self.tx_lo_ok,
             rx_gain=float(b.get_gain(0)), tx_gain=float(self.tx.get_gain(0)),
-            rx_antenna=self.rx.current_antenna, tx_antenna=str(self.tx.get_antenna(0)))
+            rx_antenna=self.rx.current_antenna, tx_antenna=f"{self._tx_frontend} : {self.tx.get_antenna(0)}")
 
     def rate_error_ppm(self) -> float:
         """Actual radio rate vs the modem's nominal 32 x modem rate, in ppm. The residual is
