@@ -377,12 +377,11 @@ BENCH_SHORT_CONTRAST = 1000.0
 
 def bench_short_warning(sched, windows) -> str:
     """A loopback bench relies on the B210's internal TX-to-RX leakage: a healthy board gives
-    pilot contrasts of a few to a few tens at TX gain 0. Rick's old blue-board B210 (serial
-    F5EB08, marked 'RFA RX2 bad') gave contrasts near 10,000 and 38 dB margins, and the
-    Workbench then showed why: frontend A's TX/RX and RX2 ports are shorted together (a
-    failed T/R switch), so the transmitter feeds the receiver directly. Such a frontend must
-    never go on the air: the amplifier drive would enter the LNA path and the LNA output
-    would sit on the transmit port. Flag it from the bench numbers."""
+    pilot contrasts of a few to a few tens at TX gain 0. A board whose TX/RX and RX2 ports
+    are shorted (a failed T/R switch; seen once on an old B210, 2026-09-14) gives contrasts
+    near 10,000 and 38 dB margins because the transmitter feeds the receiver directly. Such
+    a frontend must not go on the air until repaired: the amplifier drive would enter the
+    LNA path and the LNA output would sit on the transmit port. Flag it from the numbers."""
     if getattr(sched, "target", "") != "bench" or not windows:     # only the loopback bench assumes leakage
         return ""
     contrasts = [float(w.get("contrast", 0.0)) for w in windows if w.get("pilot_detected") or w.get("contrast")]
@@ -392,8 +391,8 @@ def bench_short_warning(sched, windows) -> str:
     if med < BENCH_SHORT_CONTRAST:
         return ""
     return (f"loopback level far above internal leakage (median pilot contrast {med:.0f}, healthy boards give "
-            f"under 100): the transmit and receive ports of this frontend may be shorted (failed T/R switch), "
-            f"as on the blue-board B210. Do not put this frontend on the air; use the other frontend (Setup, Ports).")
+            f"under 100): the transmit and receive ports of this frontend may be shorted (failed T/R switch). "
+            f"Check the board before putting this frontend on the air; the other frontend can be selected under Ports.")
 
 
 def run_job(cfg: Dict, preview_only: bool, conn, redecode: Optional[str] = None) -> None:
