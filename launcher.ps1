@@ -42,7 +42,7 @@ $py = Join-Path $prefix 'python.exe'
 # what `conda activate` does; without it python exits 127 on the first numpy.linalg call).
 $env:PATH = (Join-Path $prefix 'Library\bin') + ';' + (Join-Path $prefix 'Scripts') + ';' + $prefix + ';' + $env:PATH
 # The env may have GNU Radio but not the modem's extras: say which, instead of dying in the log.
-$missing = & $py -c "import importlib; print(' '.join(m for m in ['galois','sigmf','hid','pymupdf','serial','astropy','jplephem','pyqtgraph','scipy','matplotlib'] if not importlib.util.find_spec(m)))" 2>$null
+$missing = & $py -c "import importlib.util; print(' '.join(m for m in ['galois','sigmf','hid','pymupdf','serial','astropy','jplephem','pyqtgraph','scipy','matplotlib'] if not importlib.util.find_spec(m)))" 2>$null
 if ($missing) {
     $pipmods = ($missing -replace '\bhid\b', 'hidapi') -replace '\bserial\b', 'pyserial'
     Add-Type -AssemblyName System.Windows.Forms
