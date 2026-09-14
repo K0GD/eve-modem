@@ -304,8 +304,9 @@ use the same zip.
    ~/radioconda/bin/pip install galois sigmf hidapi pymupdf pyserial astropy jplephem
    ```
 
-   (Windows: `C:\ProgramData\radioconda\Scripts\pip.exe`, and set `EVE_PYTHON` or
-   `RADIOCONDA_ROOT` if the launcher does not find it.)
+   (Windows: `C:\ProgramData\radioconda\Scripts\pip.exe install ...` with the same list; the
+   launcher finds radioconda in `C:\ProgramData` or your profile by itself, or set `EVE_PYTHON`
+   to a `python.exe`. If an extra is missing the launcher says which one and how to add it.)
 
    **Linux: install a PDF viewer** if the desktop has none (Ubuntu with LibreOffice opens
    PDFs in Draw, which re-flows them with substitute fonts). Evince is the one to have:

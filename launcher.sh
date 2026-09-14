@@ -30,6 +30,18 @@ case "$(uname)" in
     *)      LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dses-eve-modem" ;;
 esac
 mkdir -p "$LOG_DIR"
+# The env may have GNU Radio but not the modem's extras: say which, instead of dying in the log.
+missing="$("$PY" -c "import importlib; print(' '.join(m for m in ['galois','sigmf','hid','pymupdf','serial','astropy','jplephem','pyqtgraph','scipy','matplotlib'] if not importlib.util.find_spec(m)))" 2>/dev/null || true)"
+if [ -n "$missing" ]; then
+    pipmods="$(printf '%s' "$missing" | sed -e 's/\bhid\b/hidapi/' -e 's/\bserial\b/pyserial/')"
+    msg="The Python at $PY lacks: $missing. Add them with:  $(dirname "$PY")/pip install $pipmods"
+    echo "$msg" >&2
+    echo "$(date '+%Y-%m-%d %H:%M:%S')  $msg" >> "$LOG_DIR/app.log"
+    if [ "$(uname)" = "Darwin" ]; then
+        osascript -e "display dialog \"$msg\" with title \"DSES EVE modem\" buttons {\"OK\"} default button 1" >/dev/null 2>&1 || true
+    fi
+    exit 1
+fi
 export PYQTGRAPH_QT_LIB=PySide6
 export PYTHONUNBUFFERED=1
 cd "$here"
