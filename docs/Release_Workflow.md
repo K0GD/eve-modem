@@ -53,11 +53,17 @@ The folder holds `manifest.json`, `eve-modem-<v>.zip`, `eve-modem-<v>.sha256`,
    `python tools/verify_release.py` does exactly that against the live URL.
 7. **Tag** the version-bump commit: `git tag -a v<v> <commit> -m "..."`, `git push origin v<v>`.
 8. Record the cut in `CLAUDE.md`.
-9. **Refresh the public mirror**: `bash tools/publish_github.sh` (after the push to
-   origin). The NAS stays the master; GitHub (https://github.com/K0GD/eve-modem, to move
-   to a DSES organization later) holds a read-only copy for the team and ORI with the
-   private working notes (`CLAUDE.md`) removed from every commit by git filter-repo.
-   The rewrite is deterministic, so the mirror's history is stable across runs.
+9. **Refresh the public GitHub mirror**: `bash tools/publish_github.sh`, after the
+   release commit and tag are pushed to origin. The NAS bare repo stays the master;
+   GitHub (https://github.com/K0GD/eve-modem, to move to a DSES organization once one
+   exists — the same arrangement as the Workbench's `K0GD/dses-workbench`) holds a
+   read-only copy of `main` and every release tag for the team and ORI, with the
+   private working notes (`CLAUDE.md`) removed from every commit by `git filter-repo`.
+   The rewrite is deterministic, so the mirror's commit ids stay stable across runs.
+   The script refuses to run on a dirty working tree (commit or stash first) and needs
+   `git filter-repo` plus a GitHub login (`gh auth login`). Run it after **any** push to
+   origin, not only at release time. Releases themselves are never published from
+   GitHub — the zip, sidecar, guide and manifest live on gpstime (steps 4–6).
 
 ## How the program updates
 
