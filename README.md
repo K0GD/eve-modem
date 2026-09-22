@@ -12,6 +12,28 @@ frames), while the Workbench is a receive-side observing tool that locks its
 transmitter at minimum. The two share code by factoring the Workbench's B210
 radio classes into an importable module, not by living in one file.
 
+## Getting it
+
+Releases for Windows, macOS, and Linux, with the Operator's Guide and the Design and
+ICD document, are at <https://gpstime.com/sw_distribution/eve-modem/>. The program
+updates itself from there (Help → Check for updates). On a Mac or Linux machine that
+already has [radioconda](https://github.com/ryanvolz/radioconda), one line installs
+and starts it:
+
+```
+curl -fsSL https://gpstime.com/sw_distribution/eve-modem/mac_first_run.sh | bash
+```
+
+Windows: unzip the release, create the environment with `conda env create --prefix
+.conda -f environment.yml`, run `launcher.bat`. Section 10 of the Operator's Guide has
+the details. The release zip is self-contained; running from this source tree also
+needs the Workbench's `dses_radio.py` beside `eve_app.py` (the release builder bundles it).
+
+This GitHub repository is a read-only mirror of the project's master repository, kept
+current by the maintainer; issues and pull requests are welcome but are merged on the
+master side. License: GPL-3.0 (see LICENSE); the waveform is ORI's, the station
+software is DSES's.
+
 ## Running it
 
 `eve_app.py` is the application: one window for the software simulation, the B210
