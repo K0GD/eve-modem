@@ -31,7 +31,7 @@ case "$(uname)" in
     MINGW*|MSYS*)
         # Git for Windows: use the Windows certificate store. A stale user gitconfig on
         # this machine points http.sslCAInfo at a Vivado bundle that no longer exists.
-        export GIT_SSL_BACKEND=schannel ;;
+        export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.sslBackend GIT_CONFIG_VALUE_0=schannel ;;
 esac
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
