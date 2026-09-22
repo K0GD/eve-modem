@@ -27,6 +27,12 @@ if ! git -C "$here" filter-repo --version >/dev/null 2>&1; then
     echo "git filter-repo is not installed (pip install git-filter-repo)" >&2
     exit 1
 fi
+case "$(uname)" in
+    MINGW*|MSYS*)
+        # Git for Windows: use the Windows certificate store. A stale user gitconfig on
+        # this machine points http.sslCAInfo at a Vivado bundle that no longer exists.
+        export GIT_SSL_BACKEND=schannel ;;
+esac
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 echo "== cloning the local repo into $work"
