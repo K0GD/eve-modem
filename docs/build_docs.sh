@@ -34,3 +34,14 @@ LOGO="$WB/reports/assets/DSES_Logo_Compact_Teal.png"
 # Operator's guide (same Markdown as the application's Help menu)
 "$PY" "$GEN" "$here/DSES_EVE_Modem_Operators_Guide.md"     --pdf "$here/DSES_EVE_Modem_Operators_Guide.pdf"     --docx "$here/DSES_EVE_Modem_Operators_Guide.docx"     --title 'Earth-Venus-Earth Modem' --subtitle "Operator's Guide"     --version 'Rev A - DRAFT' --header-logo "$LOGO" --force
 
+# Release workflow (does not ship): stamped with the program version, like the
+# Workbench's own workflow PDF.
+ver="$(sed -n 's/^__version__ *= *"\([^"]*\)".*/\1/p' "$here/../eve/__init__.py")"
+"$PY" "$GEN" "$here/Release_Workflow.md" \
+    --pdf   "$here/DSES_EVE_Modem_Release_Workflow.pdf" \
+    --docx  "$here/DSES_EVE_Modem_Release_Workflow.docx" \
+    --title 'Earth-Venus-Earth Modem' \
+    --subtitle 'Release Workflow' \
+    --version "v$ver" \
+    --header-logo "$LOGO" --force
+

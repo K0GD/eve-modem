@@ -32,3 +32,15 @@ $env:PATH = (Join-Path $eve 'Library\bin') + ';' + $env:PATH
     --version 'Rev B - DRAFT' `
     --header-logo $logo --force
 
+# Release workflow (does not ship): stamped with the program version, like the
+# Workbench's own workflow PDF.
+$ver = (Select-String -Path (Join-Path $here '..\eve\__init__.py') `
+        -Pattern '__version__\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+& $py $gen (Join-Path $here 'Release_Workflow.md') `
+    --pdf   (Join-Path $here 'DSES_EVE_Modem_Release_Workflow.pdf') `
+    --docx  (Join-Path $here 'DSES_EVE_Modem_Release_Workflow.docx') `
+    --title 'Earth-Venus-Earth Modem' `
+    --subtitle 'Release Workflow' `
+    --version "v$ver" `
+    --header-logo $logo --force
+
