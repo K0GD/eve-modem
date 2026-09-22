@@ -53,6 +53,11 @@ The folder holds `manifest.json`, `eve-modem-<v>.zip`, `eve-modem-<v>.sha256`,
    `python tools/verify_release.py` does exactly that against the live URL.
 7. **Tag** the version-bump commit: `git tag -a v<v> <commit> -m "..."`, `git push origin v<v>`.
 8. Record the cut in `CLAUDE.md`.
+9. **Refresh the public mirror**: `bash tools/publish_github.sh` (after the push to
+   origin). The NAS stays the master; GitHub (https://github.com/K0GD/eve-modem, to move
+   to a DSES organization later) holds a read-only copy for the team and ORI with the
+   private working notes (`CLAUDE.md`) removed from every commit by git filter-repo.
+   The rewrite is deterministic, so the mirror's history is stable across runs.
 
 ## How the program updates
 
