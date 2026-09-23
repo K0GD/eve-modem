@@ -685,17 +685,21 @@ separate instrument on the bench, the modem has a **signal generator run mode**
   (intermodulation and compression); or the EVE waveform itself with the pilot, exactly
   the session's transmission. The CW and two-tone sources are phase-continuous NCOs at
   the radio rate, gated by the schedule's on-windows like `EveToneSource`.
-- **Timing and keying.** A schedule is built for the requested duration: one on-window,
-  or, with the amplifier in the chain, windows of at most T_on,max separated by
-  T_off,min (7.2) whose on-time still adds up to the duration. The sequencer (D24)
-  keys each window in the safe order, the watchdog and Abort release the transmitter
-  first, and the Run tab shows the key state. Nothing is received or decoded.
-- **Level.** The B210 TX gain (0 to 89.75 dB in 0.25 dB steps, set on the device while
-  streaming) is the coarse control and a digital multiplier before the sink (dB below
-  full scale) the fine one; both apply immediately from the Setup tab and every change
-  is logged with its UTC time. A timed sweep steps the gain from a start to a stop level
-  by a step, holding each for a set time, starting when the transmitter is keyed, so a
-  compression curve is one run against the meter's readings.
+- **Operation and keying.** The generator is an instrument, not a schedule: it comes up
+  with the key up and stays up until the operator stops it. KEY and UNKEY on the Run tab
+  go through the sequencer (D24) with the session's key lead and lag, as often as the
+  operator likes. With the amplifier in the chain the 7.2 limits apply per key-down
+  (released at T_on,max, refused until T_off,min has passed); a watchdog releases the
+  transmitter if the program stops ticking; Abort releases it first. Nothing is received
+  or decoded. (The first 1.0.7 generator ran for a set duration; the operator's bench
+  work showed that keying at will is what integration needs, 2026-09-23.)
+- **Level and signal, live.** The B210 TX gain (0 to 89.75 dB in 0.25 dB steps, set on
+  the device while streaming) is the coarse control and a digital multiplier before the
+  sink (dB below full scale) the fine one; the signal kind, offset and spacing change the
+  source at its next sample block. All apply immediately from the Setup tab, keyed or not,
+  and every change is logged with its UTC time. A timed sweep steps the gain from a start
+  to a stop level by a step, holding each for a set time, on the first key-down and on
+  request, so a compression curve is one run against the meter's readings.
 - **Dry run.** The same run on the simulated radio, with the USB relay board and the
   simulated GPIO lines: the station's wiring to the relays is checked with no RF at all.
 - **Report.** One page: settings, every level step, every key event, with times, in
@@ -974,7 +978,7 @@ code-sharing boundary, not a runtime one:
 | D22 | Host-timed keying with an 8 s arming lead for the radio streams | Timed GPIO did not defer on the bench build; flowgraph start with two streamers takes about 4 s (sections 7.1, 7.2) |
 | D23 | The station reference is a Leo Bodnar GPS reference clock, programmed by the modem: output 1 = 10 MHz at level 1, output 2 disabled = 1 PPS; internet NTP for the host clock | The HP5065A rubidium and the site NTP server failed (Rick, 2026-09-12); the clock's lock, the B210's lock to it, and the PPS-edge time set were proven on the bench the same day (section 7.1, 5.4) |
 | D24 | The modem is the station sequencer: it drives the TX key and the LNA control itself, on a 2-channel USB relay board and the B210 GPIO_0 / GPIO_1 in parallel, with the safe order and guard times; both signals released = receive | The station has no sequencer (Alex Nersesian, 2026-09-14). Fail-safe by polarity: nothing driving the lines leaves the LNA active and the transmitter off. The GPIO pair lets a station without the board key an external sequencer from GPIO_0 alone. Rick, 2026-09-23 (section 7.2) |
-| D25 | The modem carries its own bench signal generator: CW, two-tone or the EVE waveform, keyed by the sequencer, level adjustable live (TX gain and a digital scale) or stepped on a timer, with a dry run on the simulated radio | Integrating the driver, the SSPA and the feed needs a source that keys and times like the modem; a laboratory generator does not exercise the sequencer wiring. Meter integration deferred (O18). Rick, 2026-09-23 (section 5.8) |
+| D25 | The modem carries its own bench signal generator: CW, two-tone or the EVE waveform, keyed and unkeyed at will through the sequencer until stopped, signal and level adjustable live (TX gain and a digital scale) or stepped on a timer, with a dry run on the simulated radio | Integrating the driver, the SSPA and the feed needs a source that keys and times like the modem; a laboratory generator does not exercise the sequencer wiring. Meter integration deferred (O18). Rick, 2026-09-23 (section 5.8) |
 
 ## 10.2 Open issues
 

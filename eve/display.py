@@ -491,6 +491,10 @@ class OperatorPanel(QtWidgets.QWidget):
         self.set_phase(self.session.phase, getattr(self.session, "phase_kind", "run"))
         self.btn_abort.setEnabled(getattr(self.session, "phase_kind", "run") in ("run", "busy") and self.session.phase not in ("finished", "aborted"))
         self._lamp(bool(getattr(self.radio, "keyed", False)))
+        sched_text = getattr(self.session, "sched_text", "")
+        if sched_text:                      # the signal generator writes its own pane
+            self.lbl_sched.setText(sched_text)
+            return
         lines = []
         cur = None
         for c in s.chunks:

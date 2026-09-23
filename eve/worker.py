@@ -301,21 +301,23 @@ class Runner:
         from . import siggen as G
         from .station import SessionOptions
         from . import keyer as _keyer
-        duration = float(cfg.get("siggen_duration_s", 60.0))
         pa = bool(cfg.get("siggen_pa", False))
-        t_start = now + float(cfg["lead_s"])
+        t_start = now + 2.0
         sid = f"SIGGEN-{time.strftime('%Y%m%d-%H%M%S', time.gmtime(t_start))}"
-        sched = G.build_generator_schedule(sid, t_start, f_dial, p, cfg["message"], duration, pa, pilot=cfg["pilot"])
-        desc = S.describe(sched)
+        sched = G.build_generator_schedule(sid, t_start, f_dial, p, cfg["message"], pilot=cfg["pilot"])
         signal = {"CW": "cw", "Two-tone": "two_tone", "EVE waveform": "eve"}.get(str(cfg.get("siggen_signal", "CW")), "cw")
         sweep = None
         if cfg.get("siggen_sweep"):
             sweep = G.SweepSpec(float(cfg["siggen_sweep_start_db"]), float(cfg["siggen_sweep_stop_db"]),
                                 float(cfg["siggen_sweep_step_db"]), float(cfg["siggen_sweep_hold_s"]))
-        desc += (f"\nsignal generator: {signal}, offset {float(cfg.get('siggen_offset_khz', 0.0)):+.3f} kHz, "
-                 f"scale {float(cfg.get('siggen_level_db', -3.0)):+.1f} dB, TX gain {float(cfg['tx_gain']):.2f} dB, "
-                 f"{duration:.0f} s" + (f", amplifier limits on" if pa else "")
-                 + (f", sweep {sweep.start_db:g}..{sweep.stop_db:g} dB by {sweep.step_db:g} every {sweep.hold_s:g} s" if sweep else ""))
+        desc = (f"signal generator {sid}: dial {f_dial / 1e6:.4f} MHz, {G.SIGNAL_NAMES[signal]}, "
+                f"offset {float(cfg.get('siggen_offset_khz', 0.0)):+.3f} kHz"
+                + (f", spacing {float(cfg.get('siggen_spacing_khz', 10.0)):.3f} kHz" if signal == "two_tone" else "")
+                + f"\nTX gain {float(cfg['tx_gain']):.2f} dB, scale {float(cfg.get('siggen_level_db', -3.0)):+.1f} dB"
+                + (f"; amplifier limits {G.PA_T_ON_MAX_S:.0f} s on / {G.PA_T_OFF_MIN_S:.0f} s off" if pa else "; no amplifier limits")
+                + (f"\nsweep {sweep} on every key-down" if sweep else "")
+                + ("\nDRY RUN on the simulated radio" if cfg.get("siggen_sim") else "")
+                + "\nRuns until STOP; KEY / UNKEY on the Run tab; TX gain, scale and signal change live from the Setup tab")
         if preview_only:
             self.send(("preview", desc))
             return {"ok": True, "pdf": None, "preview": True}
@@ -359,6 +361,10 @@ class Runner:
             stop.set()
             self.phase("generator stopped: releasing the key line")
             try:
+                sess.keyer.key(False)
+            except Exception:
+                pass
+            try:
                 sess.keyer.close()
             except Exception:
                 pass
@@ -391,14 +397,23 @@ class Runner:
         while not stop.is_set():
             if self.poll_commands is not None and hasattr(sess, "set_level"):
                 for cmd in self.poll_commands():
-                    if cmd and cmd[0] == "level":
-                        try:
+                    try:
+                        if cmd[0] == "level":
                             sess.set_level(tx_gain_db=cmd[1], scale_db=cmd[2])
-                        except Exception as e:      # noqa: BLE001
-                            self.say(f"level command failed: {e}")
+                        elif cmd[0] == "key":
+                            threading.Thread(target=sess.key, args=(bool(cmd[1]),), kwargs={"why": "operator"}, daemon=True).start()
+                        elif cmd[0] == "signal":
+                            sess.set_signal(cmd[1], offset_hz=cmd[2], spacing_hz=cmd[3])
+                        elif cmd[0] == "sweep":
+                            sess.start_sweep()
+                        elif cmd[0] == "stop":
+                            sess.stop()
+                    except Exception as e:      # noqa: BLE001
+                        self.say(f"{cmd[0]} command failed: {e}")
             d = {"phase": sess.phase, "keyed": bool(sess.keyer.keyed), "key_text": sess.keyer.status_text()}
             if hasattr(sess, "status_line"):
                 d["generator"] = sess.status_line()
+                d["sched_text"] = sess.sched_text()
             try:
                 if hasattr(radio, "status") and n % 4 == 0:
                     st = radio.status()
@@ -519,7 +534,7 @@ def run_job(cfg: Dict, preview_only: bool, conn, redecode: Optional[str] = None)
         try:
             conn.send(msg)
         except Exception:
-            pass
+            pending["abort"] = pending["abort"] or "GUI pipe lost"     # the status loop aborts the session
 
     def poll_abort():
         try:
@@ -527,8 +542,6 @@ def run_job(cfg: Dict, preview_only: bool, conn, redecode: Optional[str] = None)
                 m = conn.recv()
                 if m and m[0] == "abort":
                     pending["abort"] = m[1] if len(m) > 1 else "operator abort"
-                elif m and m[0] == "stop":
-                    pending["abort"] = "operator stop"
                 elif m:
                     pending["commands"].append(tuple(m))
         except Exception:
