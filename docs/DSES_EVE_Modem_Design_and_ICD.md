@@ -1002,7 +1002,7 @@ code-sharing boundary, not a runtime one:
 | O15 | Date-resolved albedo: ask ORI for ρ_eff on the March 2025 CAMRAS dates, to learn whether the validated value already reflects it, and for the 2028 window; raise at the ORI meetup of 2026-09-15 | DSES → ORI | Before Venus |
 | O16 | Closed 2026-09-12: reference lock and the PPS-edge time set proven with the GPS clock of D23; transmit frequency on the 53230A within 0.03 Hz of nominal at 1296.025 MHz (`tools/eve_txcw.py`; bench note `docs/bench/gpsdo_2026-09-12.md`). Stage 4 complete | Rick | Before EME test |
 | O17 | The CAMRAS Venus echoes of March 2025 through the receiver (stage 3's remaining item) | DSES | Before Venus |
-| O18 | Signal generator (5.8): read the power meter and the spectrum analyzer over the network into the sweep report, so the compression curve is recorded rather than copied from the meter | Rick | Bench integration of the RF package |
+| O18 | Signal generator (5.8): read the bench HP 8595E spectrum analyzer (the lab's power reference, behind a calibrated 40 dB 10 W pad) over GPIB at each sweep step and put the reading in the sweep report beside the TX gain, so the compression curve is recorded rather than copied by hand. The analyzer's measurement settings are the operator's and are not changed by the program | Rick | Bench integration of the RF package |
 
 # Appendix A — MATLAB simulation versus Python implementation
 
