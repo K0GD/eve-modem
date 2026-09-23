@@ -5,7 +5,7 @@ Spiral #2", GPL-3.0) as specified in the DSES Design Description and ICD
 (docs/DSES_EVE_Modem_Design_and_ICD.md). Pure NumPy/SciPy core; GNU Radio only in
 gr_blocks.py and radio.py.
 """
-__version__ = "1.0.7"
+__version__ = "1.0.8"
 
 from .params import EveParams  # noqa: F401
 
