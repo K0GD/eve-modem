@@ -154,8 +154,12 @@ and says so in the teal line under the run modes.
   box, the status bar, and the log. **Test TX** and **Test LNA** click the relays for a
   second without touching the radio. The two guard times are the gaps between switching
   the LNA off and keying the transmitter, and between unkeying and switching the LNA back
-  on; the RF starts 200 ms after the key as before. Choosing none for an EME or Venus run
-  is allowed but the teal line warns.
+  on; the RF starts 200 ms after the key as before. The switching runs in **every** mode,
+  the software simulation and the loopback bench included, so the relays can be watched
+  and timed with nothing on the air (in the simulation the GPIO lines are recorded rather
+  than driven). It needs 1.5 s of silence between chunks; the program raises the minimum
+  off time to that when the switching is on. Choosing none for an EME or Venus run is
+  allowed but the teal line warns.
 
 ## 4.4 Mode settings
 

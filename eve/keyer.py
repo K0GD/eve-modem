@@ -155,6 +155,8 @@ class GpioLines(Output):
     def __init__(self, radio):
         super().__init__()
         self.radio = radio
+        if getattr(radio, "sim", False):
+            self.name = "simulated GPIO"      # the software radio records the lines instead of driving pins
 
     def _write(self) -> None:
         try:
@@ -180,7 +182,7 @@ class UsbRelayBoard(Output):
     Relay 2 energized = LNA OFF, so both relays off = receive."""
     name = "USB relay board"
     TX_RELAY, LNA_RELAY = 1, 2
-    ACK_WAIT_S = 0.35        # the DIUSTOU board answers each switch frame with "CHn:STATE" ~125 ms later
+    ACK_WAIT_S = 0.25        # the DIUSTOU board answers each switch frame with "CHn:STATE" ~125 ms later
     latency_s = ACK_WAIT_S
 
     def __init__(self, port: str, serial_factory=None, baud: Optional[int] = None):
@@ -281,6 +283,12 @@ class Sequencer(Keyer):
         slow = max((o.latency_s for o in self.outputs), default=0.0)
         return self.lna_guard_s + 2.0 * slow
 
+    @property
+    def release_s(self) -> float:
+        """How long key(False) takes after T_lag: the LNA release plus two switches."""
+        slow = max((o.latency_s for o in self.outputs), default=0.0)
+        return self.lna_release_s + 2.0 * slow
+
     def open(self) -> None:
         for o in self.outputs:
             o.log = self.log
@@ -328,6 +336,15 @@ class Sequencer(Keyer):
     def status_text(self) -> str:
         s = f"TX {'KEYED' if self.keyed else 'off'}, LNA {'active' if self.lna_active else 'OFF'} | {self.name}"
         return s + (f" (fault: {self.fault})" if self.fault else "")
+
+
+def sequencer_gap_s(lna_guard_s: float, lna_release_s: float, usb_board: bool = True,
+                    t_lead_s: float = 0.2, t_lag_s: float = 0.1) -> float:
+    """The silence two chunks need between their RF for the sequencer: key lead and lag,
+    the LNA guard and release, and the USB board's acknowledged switches (two each way).
+    The session's preflight checks exactly this; the Setup page sets the off time from it."""
+    ack = UsbRelayBoard.ACK_WAIT_S if usb_board else 0.0
+    return t_lead_s + t_lag_s + lna_guard_s + lna_release_s + 4.0 * ack
 
 
 def find_relay_board(port_hint: str = "", serial_factory=None, ports=None) -> str:
@@ -511,7 +528,7 @@ def make_keyer(kind: str, radio=None, port: str = "", channel: int = 1, log=None
             outputs.append(UsbRelayBoard(found, serial_factory=serial_factory))
         elif kind == "usb_relay":
             raise ValueError("no USB relay board answered on any port (Setup: Keying)")
-        gpio_ok = radio is not None and (hasattr(radio, "set_lines") or hasattr(radio, "key")) and not getattr(radio, "sim", False)
+        gpio_ok = radio is not None and (hasattr(radio, "set_lines") or hasattr(radio, "key"))   # real or simulated
         if kind == "sequencer" and gpio_ok:
             outputs.append(GpioLines(radio))
         k: Keyer = Sequencer(outputs, lna_guard_s, lna_release_s, usb_missing=(kind == "sequencer" and not found))

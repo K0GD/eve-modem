@@ -59,7 +59,7 @@ COMMON_DEFAULTS = {"variant": "A", "message": "K0PRT K0PRT", "pilot": True, "n_f
 MODE_DEFAULTS = {
     "sim": {"f_dial_mhz": 1296.0, "repeat": 1, "full_symbol": False, "sim_cn0": 20.0, "sim_range_km": 375000.0,
             "sim_seed": 1, "bench_chunk_s": 2.4, "bench_t_off_min": 0.5, "lead_s": 12.0},
-    "bench": {"f_dial_mhz": 1296.0, "repeat": 2, "full_symbol": False, "tx_gain": 0.0, "rx_gain": 30.0, "keyer_kind": "none",
+    "bench": {"f_dial_mhz": 1296.0, "repeat": 2, "full_symbol": False, "tx_gain": 0.0, "rx_gain": 30.0,
               "bench_range_km": 0.15, "bench_chunk_s": 2.4, "bench_t_off_min": 0.5, "lead_s": 15.0},
     "interop": {"f_dial_mhz": 1296.0, "repeat": 1, "full_symbol": True, "tx_gain": 30.0, "rx_gain": 30.0,
                 "interop_chunk_s": 300.0, "interop_search_frames": 30, "sky_start_now": True, "lead_s": 30.0},
@@ -1326,6 +1326,7 @@ class EveApp(QtWidgets.QMainWindow):
                 cfg[key] = wd.dateTime().toUTC().toString(QtCore.Qt.ISODate)
             elif isinstance(wd, QtWidgets.QLineEdit):
                 cfg[key] = wd.text().strip()
+        cfg["keyer_kind"] = KEYER_KINDS.get(str(cfg.get("keyer_kind", "none")), "none")   # label -> kind for the worker
         return cfg
 
     def _save(self) -> None:
@@ -1484,6 +1485,17 @@ class EveApp(QtWidgets.QMainWindow):
                 notes.append("repeat 5")
         if m in ("eme", "eve") and self.w["keyer_kind"].currentText() == "none":
             notes.append("NO KEY LINE selected: the sequencer will not be keyed (fine only for the bare-B210 EME test)")
+        if self.w["keyer_kind"].currentText() != "none":
+            # the sequencer needs lead + lag + LNA guard + release + the USB board's four
+            # acknowledged switches between two chunks' RF (the session's preflight checks it)
+            from .keyer import sequencer_gap_s
+            import math
+            need = math.ceil((sequencer_gap_s(self.w["keyer_lna_guard_ms"].value() / 1e3,
+                                              self.w["keyer_lna_release_ms"].value() / 1e3) + 0.1) * 10) / 10
+            for key, label in (("bench_t_off_min", "bench"), ("eme_t_off_min", "Moon")):
+                if key in self.w and self.w[key].value() < need:
+                    self.w[key].setValue(need)
+                    notes.append(f"{label} off time {need:.1f} s (the sequencer needs the gap)")
         if m == "bench" and self.w["tx_gain"].value() > 20.0:
             self.w["tx_gain"].setValue(0.0)
             notes.append("TX gain 0 dB (loopback needs none)")

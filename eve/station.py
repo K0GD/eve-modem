@@ -83,6 +83,13 @@ class SimRadio:
         self._keyed = bool(on)
         self.key_log.append((time.time(), bool(on)))
 
+    def set_lines(self, tx: bool, lna_active: bool) -> None:
+        """The two station lines, recorded rather than driven (the sequencer runs in the
+        simulation exactly as on the air; a USB relay board, if present, clicks as well)."""
+        self._keyed = bool(tx)
+        self.lines = (bool(tx), bool(lna_active))
+        self.key_log.append((time.time(), bool(tx), bool(lna_active)))
+
     @property
     def keyed(self):
         return self._keyed
@@ -173,6 +180,16 @@ class Session:
             for a, b in zip(s.chunks, s.chunks[1:]):
                 if b.tx_start - a.tx_stop < PA_T_OFF_MIN_S - 1e-6:
                     problems.append(f"chunk {b.index}: off time {b.tx_start - a.tx_stop:.0f} s under the PA minimum {PA_T_OFF_MIN_S:.0f} s")
+        # the sequencer needs its guard, lead, lag and release between two chunks' RF
+        need = (self.opts.t_lead_s + self.opts.t_lag_s + float(getattr(self.keyer, "settle_s", 0.0))
+                + float(getattr(self.keyer, "release_s", 0.0)))
+        if self.opts.tx_enabled and need > 0.0:
+            for a, b in zip(s.chunks, s.chunks[1:]):
+                gap = b.tx_start - a.tx_stop
+                if gap < need - 1e-6:
+                    problems.append(f"chunk {b.index}: off time {gap:.2f} s is shorter than the sequencer needs "
+                                    f"({need:.2f} s: LNA guard, key lead and lag, LNA release); raise the minimum off time")
+                    break
         if self.opts.rx_doppler_removal and self.model is None:
             problems.append("receiver-side Doppler removal needs an ephemeris model")
         if self.opts.tx_precompensate and self.model is None and self.sched.mode != "sim":
@@ -341,7 +358,10 @@ class Session:
                 steer.start()
             t_end = max(c.rx_stop for c in s.chunks) + opts.end_margin_s
             while not self._abort.is_set():
-                if self.tone.done and (getattr(self.radio, "sim", False) or self.radio.device_time() >= t_end):
+                # The simulation is paced by its throttle now, so it waits for the schedule's end
+                # like the hardware does; ending on tone.done alone cut the last chunks' keying
+                # short (the source runs a buffer's worth ahead of the wall clock).
+                if self.tone.done and self.radio.device_time() >= t_end:
                     break
                 time.sleep(0.2)
             # drain: let the decimator and sink finish the samples already in flight

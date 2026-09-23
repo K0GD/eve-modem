@@ -139,6 +139,21 @@ def test_sequencer_without_the_usb_board_falls_back_to_gpio():
     assert r.calls[-1] == (False, True)
 
 
+def test_sequencer_in_the_simulation_records_the_lines():
+    from eve.station import SimRadio
+    from eve.params import EveParams
+    r = SimRadio(EveParams.variant_a())
+    k = K.make_keyer("sequencer", radio=r, port="auto", serial_factory=lambda p: (_ for _ in ()).throw(OSError("none")),
+                     ports=[], lna_guard_s=0.0, lna_release_s=0.0)
+    assert k.usb_missing and [o.name for o in k.outputs] == ["simulated GPIO"]
+    k.open()
+    k.key(True)
+    assert r.lines == (True, False) and r.keyed
+    k.key(False)
+    assert r.lines == (False, True) and not r.keyed
+    assert k.release_s == 0.0 and k.settle_s == 0.0
+
+
 def test_find_relay_board_picks_the_port_that_answers():
     class Mute(FakeSerial):
         def read(self, n):

@@ -143,7 +143,7 @@ class Runner:
                                              rtt_guard_s=0.0, t_off_min_s=float(cfg["bench_t_off_min"]), t_on_max_s=3600.0,
                                              mode="bistatic_tx", **common)
                 opts_kw = dict(pa_in_chain=False, tx_precompensate=False, rx_doppler_removal=False,
-                               start_margin_s=1.0, realtime_mode=False)
+                               start_margin_s=2.5, realtime_mode=False)     # room for the sequencer's lead before chunk 1
             elif mode == "bench":
                 sched = S.build_schedule(sid, "bench", model, t_start, f_dial, chunk_s=float(cfg["bench_chunk_s"]),
                                          rtt_guard_s=0.0, t_off_min_s=float(cfg["bench_t_off_min"]), t_on_max_s=3600.0,
