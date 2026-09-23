@@ -227,9 +227,14 @@ class Settings:
 
     @property
     def path(self) -> str:
+        """The INI file's path (QSettings user scope, organization DSES, application
+        EVE_Modem); shown in the status bar and the About box."""
         return self.q.fileName()
 
     def get(self, key: str):
+        """Read `key` from the INI file, coerced to the type of its DEFAULTS entry (bool,
+        int, float, or str); a missing or unparsable value gives the default. KeyError for a
+        key that is not in DEFAULTS."""
         d = self.DEFAULTS[key]
         v = self.q.value(key, d)
         if isinstance(d, bool):
@@ -247,9 +252,11 @@ class Settings:
         return str(v) if v is not None else d
 
     def set(self, key: str, value) -> None:
+        """Store `value` under `key` (written to disk on sync() or when Qt flushes)."""
         self.q.setValue(key, value)
 
     def sync(self) -> None:
+        """Flush pending values to the INI file."""
         self.q.sync()
 
 
@@ -266,9 +273,13 @@ class _RemoteRadio:
         self.sim = sim
 
     def device_time(self) -> float:
+        """The worker's radio time now: the PC clock plus the offset the worker reported with
+        the session message (B210 device time minus time.time())."""
         return time.time() + self.t_offset
 
     def status_text(self) -> str:
+        """The radio status block from the latest worker status message (the panel's radio
+        pane)."""
         return self.text
 
 
@@ -291,9 +302,14 @@ class RemoteSession:
         self._abort = abort_fn
 
     def abort(self, reason: str) -> None:
+        """Ask the worker to abort the run (the panel's ABORT button); `reason` goes to the
+        session log."""
         self._abort(reason)
 
     def frame(self, k: int, metric: np.ndarray) -> None:
+        """One ("frame", k, metric) message from the worker: frame index `k` and its metric
+        over the candidate tones are added to the accumulator and handed to the panel's
+        listeners as (k, None, metric)."""
         self.acc.add(k, metric)
         for fn in self.listeners:
             try:
@@ -302,6 +318,9 @@ class RemoteSession:
                 pass
 
     def status(self, d: Dict) -> None:
+        """Apply a ("status", dict) message from the worker: the phase text and kind (a phase
+        of 'idle' is shown as arming), the key state, and the radio, GPS clock, and ephemeris
+        texts the panel shows."""
         ph = d.get("phase", self.phase)
         self.phase = "starting the streams (arming)" if ph == "idle" else ph
         if "kind" in d:
@@ -355,6 +374,12 @@ def open_pdf(path) -> None:
 
 
 class RunController(QtCore.QObject):
+    """Runs one job at a time in a worker process (eve.worker.run_job) and turns the worker's
+    pipe messages into Qt signals for the window: log(text), state(preparing | running |
+    decoding | idle), preview_ready(schedule text), notice(a warning shown without stopping
+    the run), session_ready(RemoteSession to bind the panel to), session_done(), and
+    finished(result dict). A worker that dies while opening the radio is relaunched up to
+    three times before the operator hears of it."""
     log = QtCore.Signal(str)
     session_ready = QtCore.Signal(object)          # RemoteSession, before frames arrive (GUI binds the panel)
     preview_ready = QtCore.Signal(str)
@@ -373,12 +398,18 @@ class RunController(QtCore.QObject):
 
     # ---- public --------------------------------------------------------------------------
     def start(self, cfg: Dict, preview_only: bool = False) -> bool:
+        """Launch a run (or, with preview_only, only the schedule description) from a
+        settings dict as EveApp._values() builds it. Returns False when a job is already
+        running."""
         return self._launch(dict(cfg), preview_only, None)
 
     def redecode(self, session_json: Path) -> bool:
+        """Launch a worker that re-runs the offline decode and the report of an archived
+        session from its schedule JSON. Returns False when busy."""
         return self._launch({}, False, str(session_json))
 
     def abort(self, reason: str = "operator abort") -> None:
+        """Send ("abort", reason) to the worker; a no-op when none is running."""
         if self.conn is not None:
             try:
                 self.conn.send(("abort", reason))
@@ -386,9 +417,12 @@ class RunController(QtCore.QObject):
                 pass
 
     def panel_bound(self) -> None:
+        """Hook called when the window binds the operator panel; nothing to do with a worker
+        process (kept for the in-process API)."""
         pass
 
     def panel_released(self) -> None:
+        """Hook called when the window unbinds the operator panel; nothing to do here."""
         pass
 
     def close_radio(self) -> None:
@@ -401,6 +435,10 @@ class RunController(QtCore.QObject):
 
     # ---- process management ----------------------------------------------------------------
     def _launch(self, cfg: Dict, preview_only: bool, redecode: Optional[str], retry: int = 3) -> bool:
+        """Spawn the worker process with a duplex pipe and start the reader thread. A preview
+        worker still winding down is terminated first (its text is already on screen) rather
+        than refusing the Start. `retry` is how many relaunches a crash during the radio open
+        may still get."""
         if self.busy and self._job is not None and self._job[1] and not self._saw_session:
             # A preview worker is still winding down (its text is already on screen; a
             # process with UHD and GNU Radio loaded can take many seconds to exit). Nothing
@@ -430,6 +468,10 @@ class RunController(QtCore.QObject):
         return True
 
     def _pump(self, conn, proc) -> None:
+        """The reader thread: forwards pipe messages to _handle until the worker exits, then
+        relaunches a worker that crashed before the session existed (while retries remain) or
+        synthesizes a failure result, and emits session_done, state('idle'), and finished
+        (previews emit no finished)."""
         finished = None
         try:
             while True:
@@ -476,6 +518,8 @@ class RunController(QtCore.QObject):
                 self.finished.emit(finished)
 
     def _handle(self, msg) -> Optional[Dict]:
+        """Dispatch one pipe message to the matching signal or the RemoteSession; returns the
+        result dict of a 'finished' message, else None."""
         kind = msg[0]
         if kind == "log":
             self.log.emit(msg[1])
@@ -524,6 +568,7 @@ class ReportPane(QtWidgets.QWidget):
         lay.addWidget(self.scroll, 1)
 
     def clear(self) -> None:
+        """Remove every rendered page widget from the pane."""
         while self.pages_lay.count():
             w = self.pages_lay.takeAt(0).widget()
             if w is not None:
@@ -531,6 +576,9 @@ class ReportPane(QtWidgets.QWidget):
                 w.deleteLater()
 
     def render(self, pdf: Optional[Path], zoom: int) -> None:
+        """Show `pdf` (a Path, or None for 'no report selected') at `zoom` percent: every
+        page is rasterized with pymupdf at 96 dpi times zoom/100 into a QLabel. A rendering
+        failure shows the error and points to 'Open in PDF viewer'."""
         self.clear()
         self.current = pdf
         if pdf is None or not pdf.exists():
@@ -636,13 +684,17 @@ class ReportView(QtWidgets.QWidget):
     # ---- compatibility with the earlier single-pane API
     @property
     def current(self) -> Optional[Path]:
+        """The report in the main pane (Path), or None."""
         return self.pane.current
 
     @property
     def pages_lay(self):
+        """The main pane's page layout (the earlier single-pane API)."""
         return self.pane.pages_lay
 
     def set_archive(self, folder: str) -> None:
+        """Point the view at another archive folder and re-read its reports (the Setup tab's
+        archive field, on Browse and Start)."""
         self.archive = Path(folder)
         self.refresh()
 
@@ -650,6 +702,9 @@ class ReportView(QtWidgets.QWidget):
         return sorted(self.archive.glob("*_report.pdf"), key=lambda f: f.stat().st_mtime, reverse=True) if self.archive.exists() else []
 
     def refresh(self) -> None:
+        """Re-read the archive folder for *_report.pdf files (newest first) into the list and
+        the compare chooser, keeping the current choices; with nothing chosen the newest
+        report is shown."""
         files = self._files()
         keep = self.pane.current
         self.list.blockSignals(True)
@@ -675,6 +730,8 @@ class ReportView(QtWidgets.QWidget):
             self.select(keep)
 
     def select(self, pdf: Path) -> None:
+        """Select `pdf` in the list (which renders it) or, when it is not listed, render it
+        in the main pane directly."""
         for i in range(self.list.count()):
             if self.list.item(i).data(QtCore.Qt.UserRole) == str(pdf):
                 if self.list.currentRow() == i:
@@ -685,15 +742,19 @@ class ReportView(QtWidgets.QWidget):
         self.pane.render(pdf, int(self.zoom.currentData()))
 
     def _pick(self, cur, _prev) -> None:
+        """List selection changed: render the chosen report in the main pane."""
         if cur is None:
             return
         self.pane.render(Path(cur.data(QtCore.Qt.UserRole)), int(self.zoom.currentData()))
 
     def _pane2_changed(self, i: int) -> None:
+        """Compare chooser changed: render its report in the second pane while Compare is on."""
         if i >= 0 and self.compare.isChecked():
             self.pane2.render(Path(self.pane2_pick.itemData(i)), int(self.zoom.currentData()))
 
     def _toggle_compare(self, on: bool) -> None:
+        """Compare box toggled: show or hide the second pane; on first use it defaults to the
+        run before the one in the main pane and the two panes are split evenly (guide 6)."""
         self.pane2_w.setVisible(on)
         if on:
             if self.pane2_pick.count() and self.pane2.current is None:
@@ -708,6 +769,7 @@ class ReportView(QtWidgets.QWidget):
             self.panes.setSizes([1, 1])
 
     def _rerender(self) -> None:
+        """Zoom changed: remember it in the report_zoom setting and re-render both panes."""
         z = int(self.zoom.currentData())
         self.settings.set("report_zoom", z)
         self.pane.render(self.pane.current, z)
@@ -715,10 +777,13 @@ class ReportView(QtWidgets.QWidget):
             self.pane2.render(self.pane2.current, z)
 
     def _open_external(self) -> None:
+        """'Open in PDF viewer' button: open the main pane's report with open_pdf()."""
         if self.pane.current is not None and self.pane.current.exists():
             open_pdf(self.pane.current)
 
     def _redecode(self) -> None:
+        """'Re-decode this session' button: emit redecode_requested with the session's
+        schedule JSON (<session_id>.json beside the report) when it exists."""
         if self.pane.current is None:
             return
         sid = self.pane.current.name[:-len("_report.pdf")]
@@ -737,6 +802,9 @@ DESIGN_PDF = DOCS / "DSES_EVE_Modem_Design_and_ICD.pdf"
 
 
 class HelpDialog(QtWidgets.QDialog):
+    """The operator's guide (docs/DSES_EVE_Modem_Operators_Guide.md rendered as Markdown in a
+    QTextBrowser) with a find box and buttons that open the guide and design PDFs. Help >
+    Operator's guide, F1."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("DSES EVE modem — Operator's guide")
@@ -769,6 +837,7 @@ class HelpDialog(QtWidgets.QDialog):
         lay.addWidget(self.view, 1)
 
     def _find(self):
+        """Enter in the find box: jump to the next match of the text, wrapping to the top."""
         q = self.search.text()
         if q and not self.view.find(q):
             self.view.moveCursor(QtGui.QTextCursor.Start)
@@ -779,6 +848,10 @@ class HelpDialog(QtWidgets.QDialog):
 # main window
 # ------------------------------------------------------------------------------------------
 class EveApp(QtWidgets.QMainWindow):
+    """The main window: Setup, Run, and Report tabs (operator's guide sections 4, 5, 6), the
+    File and Help menus, and the RunController. Settings, window geometry, and splitter
+    states are restored from the INI file at start and saved on every Start, on File > Save
+    settings, and on exit; the start-up update check runs after the window is built."""
     def __init__(self):
         super().__init__()
         self.settings = Settings()
@@ -833,8 +906,10 @@ class EveApp(QtWidgets.QMainWindow):
         a = helpm.addAction("About")
         a.triggered.connect(lambda: QtWidgets.QMessageBox.about(
             self, "DSES EVE modem",
-            f"DSES Earth-Venus-Earth modem {__version__}\n\nORI 'Spiral #2' waveform by Pete Wyckoff, KA3WCA "
-            f"(Open Research Institute, GPL-3.0).\nDSES implementation: Rick Hambly, K0GD.\n\n"
+            f"DSES Earth-Venus-Earth modem {__version__}\n\n"
+            f"Waveform: ORI 'Spiral #2' by Pete Wyckoff, KA3WCA; reference implementation by Michelle Thompson "
+            f"(Open Research Institute, GPL-3.0). We could not have done this without them.\n"
+            f"Station software and receiver: Rick Hambly, K0GD, Deep Space Exploration Society.\n\n"
             f"Settings: {self.settings.path}"))
         self._help_dlg = None
         self._load()
@@ -860,6 +935,10 @@ class EveApp(QtWidgets.QMainWindow):
 
     # ---- setup tab ----------------------------------------------------------------------
     def _build_setup(self) -> QtWidgets.QWidget:
+        """Build the Setup tab: run mode, waveform, radio, keying, and mode-specific groups
+        on the left (in a scroll area, splitter), the schedule preview, START / ABORT, and
+        the controller log on the right. Every control registered in self.w gets its TIPS
+        tooltip, and its row label the same."""
         w = QtWidgets.QWidget()
         outer = QtWidgets.QHBoxLayout(w)
         outer.setContentsMargins(4, 4, 4, 4)
@@ -1280,6 +1359,8 @@ class EveApp(QtWidgets.QMainWindow):
 
     # ---- settings <-> form -------------------------------------------------------------
     def _load(self) -> None:
+        """Fill the form from the settings (legacy keyer labels mapped to the current one);
+        the coherence rules are held off while loading."""
         self._loading = True
         s = self.settings
         mode = s.get("mode")
@@ -1314,6 +1395,8 @@ class EveApp(QtWidgets.QMainWindow):
         self._symbol_changed()
 
     def _values(self) -> Dict:
+        """The form as a dict keyed like Settings.DEFAULTS plus 'mode'; keyer_kind is
+        translated from its label to the kind name the worker expects (KEYER_KINDS)."""
         cfg: Dict = {"mode": self.mode()}
         for key, wd in self.w.items():
             if isinstance(wd, QtWidgets.QCheckBox):
@@ -1330,6 +1413,8 @@ class EveApp(QtWidgets.QMainWindow):
         return cfg
 
     def _save(self) -> None:
+        """File > Save settings (Ctrl+S), also run on Start and at exit: write the form, the
+        window geometry, and the splitter states to the INI file."""
         cfg = self._values()
         for k, v in cfg.items():
             self.settings.set(k, v)
@@ -1342,10 +1427,14 @@ class EveApp(QtWidgets.QMainWindow):
         self.status.setText(f"settings saved to {self.settings.path}")
 
     def mode(self) -> str:
+        """The selected run mode key: sim, bench, interop, eme, or eve (bench if none is
+        checked)."""
         b = self.mode_group.checkedButton()
         return b.property("mode") if b is not None else "bench"
 
     def _refresh_ports(self) -> None:
+        """Refresh button beside the USB board port: re-scan the serial ports into the combo
+        ('auto' first), keeping the current choice."""
         from .keyer import list_serial_ports
         pc = self.w["keyer_port"]
         keep = pc.currentText()
@@ -1363,6 +1452,8 @@ class EveApp(QtWidgets.QMainWindow):
         pc.blockSignals(False)
 
     def _keyer_changed(self) -> None:
+        """Switching combo changed: enable the port, guard-time, and test controls only for
+        the sequencer and describe the outputs under the group (guide 4.3, design 7.2)."""
         k = KEYER_KINDS.get(self.w["keyer_kind"].currentText(), "none")
         seq = k == "sequencer"
         for key in ("keyer_port", "keyer_lna_guard_ms", "keyer_lna_release_ms"):
@@ -1409,10 +1500,14 @@ class EveApp(QtWidgets.QMainWindow):
             self._log(f"test {which.upper()} failed: {e}")
 
     def _reference_changed(self) -> None:
+        """Clock source or mode changed: the Leo Bodnar box is enabled only for the external
+        clock outside simulation."""
         ext = self.w["clock"].currentText() == "external" and self.mode() != "sim"
         self.w["gpsdo"].setEnabled(ext)
 
     def _apply_values(self, d: Dict) -> None:
+        """Set form widgets from a key -> value dict (unknown keys ignored; the date-time
+        field is not covered)."""
         for key, v in d.items():
             wd = self.w.get(key)
             if wd is None:
@@ -1431,6 +1526,9 @@ class EveApp(QtWidgets.QMainWindow):
                 wd.setText(str(v))
 
     def _set_defaults(self) -> None:
+        """'Set defaults for this run mode' button: apply COMMON_DEFAULTS plus the mode's
+        MODE_DEFAULTS, then the coherence rules; the keys that changed go to the status line
+        and the log."""
         m = self.mode()
         d = dict(COMMON_DEFAULTS)
         d.update(MODE_DEFAULTS[m])
@@ -1444,6 +1542,8 @@ class EveApp(QtWidgets.QMainWindow):
         self._log(msg)
 
     def _coherence(self) -> List[str]:
+        """Run _coherence_rules() unless the form is loading or the rules are already running
+        (a setter they call re-enters here); returns the notes."""
         if getattr(self, "_loading", False) or getattr(self, "_in_coherence", False):
             return []          # not while loading, and not re-entered from a setter it just called
         self._in_coherence = True
@@ -1489,7 +1589,6 @@ class EveApp(QtWidgets.QMainWindow):
             # the sequencer needs lead + lag + LNA guard + release + the USB board's four
             # acknowledged switches between two chunks' RF (the session's preflight checks it)
             from .keyer import sequencer_gap_s
-            import math
             need = math.ceil((sequencer_gap_s(self.w["keyer_lna_guard_ms"].value() / 1e3,
                                               self.w["keyer_lna_release_ms"].value() / 1e3) + 0.1) * 10) / 10
             for key, label in (("bench_t_off_min", "bench"), ("eme_t_off_min", "Moon")):
@@ -1520,6 +1619,9 @@ class EveApp(QtWidgets.QMainWindow):
         return notes
 
     def _mode_changed(self, user: bool = False) -> None:
+        """Run-mode radio clicked (user=True) or start-up: switch the mode-specific group,
+        show the sky group, enable the radio and keying controls outside simulation, and
+        apply the coherence rules when the operator made the change."""
         m = self.mode()
         self.mode_stack.setCurrentIndex([k for k, _ in MODES].index(m))
         self.sky_box.setVisible(m in ("eme", "eve", "interop"))
@@ -1539,6 +1641,9 @@ class EveApp(QtWidgets.QMainWindow):
             self.lbl_coherence.setText("")
 
     def _symbol_changed(self) -> None:
+        """Variant, full-length, or test-frames changed: rewrite the symbol-length line
+        (seconds per symbol, minutes per pass, the one-pass C/N0 threshold from
+        cn0_threshold_db) and enable the test-length fields only for a test symbol."""
         v = self.w["variant"].currentText()
         p = EveParams.named(v)
         full = self.w["full_symbol"].isChecked()
@@ -1553,6 +1658,9 @@ class EveApp(QtWidgets.QMainWindow):
             self.w[key].setEnabled(not full)
 
     def _ports_changed(self) -> None:
+        """TX frontend or RX port changed: warn in red when the receive port is the
+        transmitting frontend's TX/RX, note in teal when the choice is not the station wiring
+        (ICD 7.1)."""
         tx = self.w["tx_port"].currentText()
         rx = self.w["rx_port"].currentText()
         if rx.endswith("TX/RX") and rx.startswith(tx):
@@ -1567,6 +1675,7 @@ class EveApp(QtWidgets.QMainWindow):
             self.lbl_ports.setText("")
 
     def _browse_archive(self) -> None:
+        """Browse button: choose the archive folder and point the Report tab at it."""
         d = QtWidgets.QFileDialog.getExistingDirectory(self, "Archive folder", self.w["archive"].text() or ".")
         if d:
             self.w["archive"].setText(d)
@@ -1574,10 +1683,13 @@ class EveApp(QtWidgets.QMainWindow):
 
     # ---- actions -------------------------------------------------------------------------
     def _log(self, s: str) -> None:
+        """Append a time-stamped line to the Setup tab log and the Run tab log."""
         self.setup_log.appendPlainText(f"{iso_utc(time.time(), 0)[11:19]}  {s}")
         self.panel.append_log(s)
 
     def _preview(self) -> None:
+        """'Preview schedule' button: save the settings and launch a preview-only worker; the
+        text arrives through preview_ready."""
         self._save()
         self.preview.setPlainText("building the schedule ...")
         if not self.ctl.start(self._values(), preview_only=True):
@@ -1593,9 +1705,12 @@ class EveApp(QtWidgets.QMainWindow):
         self._notice_box = box
 
     def _preview_ready(self, text: str) -> None:
+        """Worker preview text: show it in the schedule preview box."""
         self.preview.setPlainText(text)
 
     def _start(self) -> None:
+        """START button: save, confirm a test-length symbol on the air, point the Report tab
+        at the archive, launch the run, and switch to the Run tab."""
         self._save()
         cfg = self._values()
         if cfg["mode"] in ("eme", "eve", "interop") and cfg["full_symbol"] is False:
@@ -1614,15 +1729,20 @@ class EveApp(QtWidgets.QMainWindow):
             self.status.setText("a run is already in progress")
 
     def _session_ready(self, sess) -> None:
+        """Worker sent the session: bind the operator panel to it and show the schedule in
+        the preview box."""
         self.panel.bind(sess)
         self.ctl.panel_bound()
         self.preview.setPlainText(S.describe(sess.sched))
 
     def _session_done(self) -> None:
+        """Worker is done with the session: unbind the panel (its last picture stays)."""
         self.panel.unbind()          # keeps what is drawn; drops the references
         self.ctl.panel_released()
 
     def _state(self, st: str) -> None:
+        """Controller state changed: status bar, the busy badge before a session exists, and
+        the enable state of START, Preview, ABORT, and Re-decode."""
         self.status.setText(st)
         running = st != "idle"
         if self.ctl.session is None and st != "idle":
@@ -1633,6 +1753,8 @@ class EveApp(QtWidgets.QMainWindow):
         self.report.btn_redecode.setEnabled(not running)
 
     def _finished(self, result: Dict) -> None:
+        """Run result from the worker: warn on an error, refresh the Report tab, and show the
+        new report with the verdict in the status bar."""
         pdf = result.get("pdf")
         if result.get("error"):
             self.status.setText("failed: " + result["error"])
@@ -1644,11 +1766,15 @@ class EveApp(QtWidgets.QMainWindow):
             self.status.setText(("DECODED  " if result.get("ok") else "not decoded  ") + result.get("session_id", ""))
 
     def _redecode(self, session_json: Path) -> None:
+        """Report tab asked for a re-decode: launch it through the controller, or say busy."""
         if not self.ctl.redecode(session_json):
             self.status.setText("busy")
 
     # ---- updates (Help menu; eve/update_ui.py) --------------------------------------------
     def _start_update_check(self) -> None:
+        """Create the start-up UpdateChecker and, when auto_check is on and the last check
+        (last_check_iso) is older than check_interval_hours, run it 2.5 s after start (guide
+        section 3)."""
         from . import update_ui as U
         self._update_checker = U.UpdateChecker(self.settings, parent=self)
         self._update_checker.update_available.connect(self._show_update_dialog)
@@ -1665,6 +1791,8 @@ class EveApp(QtWidgets.QMainWindow):
         QtCore.QTimer.singleShot(2500, self._update_checker.check_now)
 
     def _check_updates_manual(self) -> None:
+        """Help > Check for updates: check the manifest now and answer with 'nothing to do',
+        the update dialog, or the failure in a message box."""
         from . import update_ui as U
         url = str(self.settings.get("manifest_url")).strip()
         if not url:
@@ -1680,6 +1808,9 @@ class EveApp(QtWidgets.QMainWindow):
         chk.check_now()
 
     def _show_update_dialog(self, latest: str, url: str, notes: str) -> None:
+        """An update is available: show UpdateNotificationDialog unless the start-up check
+        found a version the operator skipped (dismissed_version); Skip records the version,
+        Install goes to _install_update."""
         from . import update_ui as U
         dismissed = str(self.settings.get("dismissed_version")).strip()
         if dismissed and U.parse_version(latest) <= U.parse_version(dismissed) and self.sender() is getattr(self, "_update_checker", None):
@@ -1694,6 +1825,8 @@ class EveApp(QtWidgets.QMainWindow):
         self.status.setText(f"update {latest} available")
 
     def _install_update(self, download_url: str, latest: str) -> None:
+        """Install Update requested: refuse during a run, ask where (InstallUpdateDialog),
+        then run UpdateInstaller under a progress dialog."""
         from . import update_ui as U
         if not download_url:
             return
@@ -1729,6 +1862,8 @@ class EveApp(QtWidgets.QMainWindow):
         inst.start()
 
     def _on_install_done(self, ok: bool, msg: str, mode: str, install_dir: Path, prog) -> None:
+        """Installer finished: report a failure (nothing was changed), offer a restart after
+        an in-place install (update_ui.relaunch, then close), or say where the new copy went."""
         from . import update_ui as U
         prog.close()
         if not ok:
@@ -1745,12 +1880,15 @@ class EveApp(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.information(self, "Update installed", msg)
 
     def _help(self) -> None:
+        """Help > Operator's guide (F1): show the HelpDialog, created on first use."""
         if self._help_dlg is None:
             self._help_dlg = HelpDialog(self)
         self._help_dlg.show()
         self._help_dlg.raise_()
 
     def closeEvent(self, ev: QtGui.QCloseEvent) -> None:
+        """Window close (also File > Exit): confirm when a run is in progress and abort it,
+        save the settings, and stop the worker process."""
         if self.ctl.busy:
             r = QtWidgets.QMessageBox.question(self, "A run is in progress", "Abort the run and quit?")
             if r != QtWidgets.QMessageBox.Yes:
@@ -1764,6 +1902,8 @@ class EveApp(QtWidgets.QMainWindow):
 
 
 def main(argv=None) -> int:
+    """Entry point of eve_app.py: create the QApplication (name 'DSES EVE modem', window icon
+    icons/eve_modem.ico), show EveApp, and return the event loop's exit code."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv if argv is None else argv)
     app.setApplicationName("DSES EVE modem")
     icon = Path(__file__).resolve().parents[1] / "icons" / "eve_modem.ico"

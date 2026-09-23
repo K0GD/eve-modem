@@ -112,6 +112,7 @@ def download(url, dest, progress=None):
 
 
 def sha256_file(path):
+    """Hex SHA-256 of a file, read in 64 KiB chunks."""
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(_CHUNK), b""):
@@ -195,6 +196,8 @@ _LAUNCHERS = ("launcher.sh", "launcher.command", "install-shortcut.command")
 
 
 def _make_launchers_executable(install_dir):
+    """Add the executable bits to the shell launchers in `install_dir` (_LAUNCHERS); errors
+    are ignored."""
     install_dir = Path(install_dir)
     for name in _LAUNCHERS:
         f = install_dir / name

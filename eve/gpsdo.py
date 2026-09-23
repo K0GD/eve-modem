@@ -56,6 +56,10 @@ DEFAULT_PLAN_10MHZ = dict(n3=5, n2_hs=11, n2_ls=512, n1_hs=11, nc1_ls=48, nc2_ls
 
 @dataclass
 class Plan:
+    """The clock's divider plan, the contents of feature report 9: fin, the GPS-derived
+    reference in Hz, the integer dividers N3, N2_HS, N2_LS, N1_HS, NC1_LS, NC2_LS of the
+    chain in the module docstring, the output skew and the PLL bandwidth code. The derived
+    frequencies are exact Fractions in Hz."""
     fin: int
     n3: int
     n2_hs: int
@@ -68,21 +72,28 @@ class Plan:
 
     @property
     def f3(self) -> Fraction:
+        """Phase-detector frequency fin / N3, Hz."""
         return Fraction(self.fin, self.n3)
 
     @property
     def fosc(self) -> Fraction:
+        """Oscillator frequency f3 x N2_HS x N2_LS, Hz."""
         return self.f3 * self.n2_hs * self.n2_ls
 
     @property
     def fout1(self) -> Fraction:
+        """Output 1 frequency fosc / (N1_HS x NC1_LS), Hz."""
         return self.fosc / (self.n1_hs * self.nc1_ls)
 
     @property
     def fout2(self) -> Fraction:
+        """Output 2 frequency fosc / (N1_HS x NC2_LS), Hz."""
         return self.fosc / (self.n1_hs * self.nc2_ls)
 
     def check(self) -> List[str]:
+        """Divider ranges and frequency windows of the chain (FOSC_MIN..FOSC_MAX for the
+        oscillator); returns the list of violations, empty when the clock will accept the
+        plan."""
         p = []
         if not 1 <= self.n3 <= 1 << 19: p.append("N3 out of range")
         if not 4 <= self.n2_hs <= 11: p.append("N2_HS out of range")
@@ -91,12 +102,13 @@ class Plan:
         for name, v in (("NC1_LS", self.nc1_ls), ("NC2_LS", self.nc2_ls)):
             if not (v == 1 or (2 <= v <= 1 << 20 and v % 2 == 0)): p.append(f"{name} must be 1 or even in 2..2^20")
         if not F3_MIN <= self.f3 <= F3_MAX: p.append(f"f3 {float(self.f3):.0f} Hz outside 10 kHz..2 MHz")
-        if not FOSC_MIN <= self.fosc <= FOSC_MAX: p.append(f"fosc {float(self.fosc)/1e9:.4f} GHz outside 4.85..5.67 GHz")
+        if not FOSC_MIN <= self.fosc <= FOSC_MAX: p.append(f"fosc {float(self.fosc)/1e9:.4f} GHz outside {FOSC_MIN/1e9:.2f}..{FOSC_MAX/1e9:.2f} GHz")
         for name, v in (("fout1", self.fout1), ("fout2", self.fout2)):
             if not FOUT_MIN <= v <= FOUT_MAX: p.append(f"{name} {float(v):.1f} Hz outside 450 Hz..808 MHz")
         return p
 
     def summary(self) -> str:
+        """One line with the dividers and the frequencies they produce."""
         return (f"fin {self.fin} Hz, N3 {self.n3} (f3 {float(self.f3):.1f} Hz), N2 {self.n2_hs}x{self.n2_ls} "
                 f"(fosc {float(self.fosc)/1e9:.6f} GHz), N1_HS {self.n1_hs}, NC1 {self.nc1_ls}, NC2 {self.nc2_ls} -> "
                 f"out1 {float(self.fout1):.6f} Hz, out2 {float(self.fout2):.6f} Hz; skew {self.skew}, bw {self.bw}")
@@ -108,7 +120,7 @@ def plan_outputs(fin: int, f1: float, f2: Optional[float] = None, skew: int = 0,
     fosc must be an integer multiple of f1 * N1_HS and of f2 * N1_HS (so the NC dividers
     are integers) and equal f3 * N2_HS * N2_LS with N2_LS even; so for each N1_HS the
     candidate oscillator frequencies are the multiples of lcm(f1, f2) * N1_HS inside the
-    4.85..5.67 GHz window, and for each candidate the input side is solved for the
+    FOSC_MIN..FOSC_MAX window (4.85..6.2 GHz), and for each candidate the input side is solved for the
     smallest N3 that makes N2_LS an even integer. Exact in rational arithmetic."""
     from math import gcd
     f2 = f1 if f2 is None else f2
@@ -185,17 +197,24 @@ def encode_plan(plan: "Plan") -> bytes:
 
 @dataclass
 class Status:
+    """The clock's 2-byte input report decoded: loss_count is the signal-loss counter,
+    sat_lock the GPS satellite lock, pll_lock the synthesizer PLL's lock to it. The report
+    carries the two as loss flags (bit 0 = no satellite lock, bit 1 = PLL unlocked);
+    LeoBodnarGPSDO.status() inverts them."""
     loss_count: int
     sat_lock: bool
     pll_lock: bool
 
     @property
     def locked(self) -> bool:
+        """Both satellite and PLL lock; what the preflight waits for."""
         return self.sat_lock and self.pll_lock
 
 
 @dataclass
 class Config:
+    """The decoded configuration: which outputs are enabled, the drive level 0..3 (8, 16,
+    24, 32 mA), the divider Plan, and the undocumented tail of report 9 as hex text."""
     out1_on: bool
     out2_on: bool
     level: int
@@ -203,11 +222,17 @@ class Config:
     raw_tail: str = ""
 
     def summary(self) -> str:
+        """One line: outputs, level with its mA and dBm, and the plan summary."""
         return (f"out1 {'ON' if self.out1_on else 'off'}, out2 {'ON' if self.out2_on else 'off'}, "
                 f"level {self.level} ({LEVELS_MA[self.level]} mA, about +{LEVELS_DBM[self.level]} dBm); {self.plan.summary()}")
 
 
 class LeoBodnarGPSDO:
+    """One clock over USB HID (the hidapi package, imported on demand so the modem runs
+    without it). Opens the first matching unit, or the one with USB serial `serial`; every
+    method talks to the device directly and what is written persists in its flash. Call
+    close() when done. The application's worker opens the B210 BEFORE it opens and closes
+    this handle (see EveRadio.create)."""
     def __init__(self, serial: Optional[str] = None):
         import hid                      # hidapi (pip); imported here so the modem runs without it
         self._hid = hid
@@ -222,13 +247,17 @@ class LeoBodnarGPSDO:
 
     @property
     def serial(self) -> str:
+        """The USB serial number string (it changed with a firmware update on the bench;
+        never key anything on it)."""
         return self.info.get("serial_number", "")
 
     @property
     def product(self) -> str:
+        """The USB product string."""
         return self.info.get("product_string", "")
 
     def close(self):
+        """Close the HID handle (errors ignored)."""
         try:
             self.dev.close()
         except Exception:
@@ -236,12 +265,14 @@ class LeoBodnarGPSDO:
 
     # ---- read ------------------------------------------------------------------------------
     def status(self, timeout_ms: int = 1500) -> Status:
+        """Read one input report (blocking up to timeout_ms) and decode it into a Status."""
         buf = self.dev.read(2, timeout_ms)
         if len(buf) < 2:
             raise RuntimeError("no status report from the clock")
         return Status(int(buf[0]), not bool(buf[1] & 0x01), not bool(buf[1] & 0x02))
 
     def config(self) -> Config:
+        """Read feature report 9 and decode it into a Config."""
         r = bytes(self.dev.get_feature_report(_REPORT_CONFIG, 61))
         return parse_config(r)
 
@@ -254,18 +285,24 @@ class LeoBodnarGPSDO:
         time.sleep(0.05)
 
     def set_plan(self, plan: Plan) -> None:
+        """Write a divider plan (command 4) after check(); ValueError on a bad plan. The PLL
+        drops lock for a few seconds after any reprogram and re-locks in about 20 s."""
         probs = plan.check()
         if probs:
             raise ValueError("; ".join(probs))
         self._send(encode_plan(plan))
 
     def set_level(self, level: int) -> None:
+        """Set the output drive level 0..3 (8, 16, 24, 32 mA); level 1 is the B210 setting
+        (about +11 dBm into 50 ohms, design document 7.1)."""
         if not 0 <= level <= 3:
             raise ValueError("level 0..3")
         b = bytearray(61); b[1] = _CMD_LEVEL; b[2] = level
         self._send(bytes(b))
 
     def set_outputs(self, out1: bool, out2: bool) -> None:
+        """Enable or disable each output. With output 2 disabled the OUT2 pin carries the
+        GPS receiver's 1 PPS (firmware 1.7), which is how the B210 gets its PPS (D23)."""
         b = bytearray(61); b[1] = _CMD_OUTPUT; b[2] = (OUTPUT1 if out1 else 0) | (OUTPUT2 if out2 else 0)
         self._send(bytes(b))
 
@@ -306,6 +343,8 @@ class LeoBodnarGPSDO:
         return new
 
     def wait_lock(self, timeout_s: float = 60.0) -> Status:
+        """Poll status() once a second until satellite and PLL lock or timeout_s elapses;
+        returns the last Status (the caller checks .locked)."""
         deadline = time.monotonic() + timeout_s
         st = self.status()
         while not st.locked and time.monotonic() < deadline:
@@ -347,6 +386,8 @@ def preflight(serial: Optional[str] = None, f1: float = 10e6, level: int = 1, ap
 
 
 def main(argv=None):
+    """The command line of the module docstring (status, config, plan, set, restore-default,
+    identify, preflight); returns the exit code."""
     ap = argparse.ArgumentParser(description="Leo Bodnar GPS reference clock over USB HID")
     ap.add_argument("--serial", default=None)
     sub = ap.add_subparsers(dest="cmd", required=True)

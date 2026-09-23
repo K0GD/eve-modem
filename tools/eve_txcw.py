@@ -48,9 +48,11 @@ class Counter:
         self.s.settimeout(timeout)
 
     def cmd(self, c: str) -> None:
+        """Send one SCPI command (newline appended)."""
         self.s.sendall((c + "\n").encode())
 
     def ask(self, q: str) -> str:
+        """Send a query and return the reply up to its newline, stripped."""
         self.cmd(q)
         buf = b""
         while not buf.endswith(b"\n"):
@@ -61,6 +63,7 @@ class Counter:
         return buf.decode().strip()
 
     def close(self) -> None:
+        """Close the socket (errors ignored)."""
         try:
             self.s.close()
         except Exception:
@@ -68,6 +71,12 @@ class Counter:
 
 
 def main() -> int:
+    """Open the B210, transmit the chosen comb tone at constant amplitude, optionally check
+    the internal leakage on RX2, and read the counter --readings times at its found gate,
+    printing each error and the mean against the 0.1 Hz gate of design 5.4. The counter's
+    gate is restored and it is left running and local, the tone stopped and the radio closed,
+    in a finally. Returns 0 on success, 3 GPS clock unlocked, 4 TX LO offset not honored, 5
+    no reading."""
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--variant", default="A")
     ap.add_argument("--f-dial", type=float, default=1296e6)

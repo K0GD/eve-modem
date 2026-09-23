@@ -81,18 +81,24 @@ class Keyer:
         self.log = lambda s: None
 
     def open(self) -> None:
+        """Open the hardware, if any; problems surface here, before any RF."""
         pass
 
     def key(self, on: bool) -> None:
+        """Key (True) or release (False) the transmitter; for a Sequencer this is the whole
+        LNA / guard / TX sequence. Records the commanded state in `keyed` and never raises:
+        a failure goes to `fault`. The base class only records the state."""
         self.keyed = bool(on)
 
     def close(self) -> None:
+        """Release the key line (errors swallowed), then let subclasses release the hardware."""
         try:
             self.key(False)
         except Exception:
             pass
 
     def status_text(self) -> str:
+        """One line for the display and the log: name, KEYED or up, and any fault."""
         return f"{self.name}: {'KEYED' if self.keyed else 'up'}" + (f" (fault: {self.fault})" if self.fault else "")
 
 
@@ -111,6 +117,7 @@ class GpioKeyer(Keyer):
         self.radio = radio
 
     def key(self, on: bool) -> None:
+        """Drive GPIO_0 through the radio's key(); a failure is stored in `fault`, not raised."""
         try:
             self.radio.key(on)
             self.keyed = bool(on)
@@ -134,15 +141,20 @@ class Output:
         self.lna = True
 
     def open(self) -> None:
+        """Open the hardware behind this output; the base class has none."""
         pass
 
     def set_tx(self, on: bool) -> None:
+        """Drive the TX key signal: True = transmitter keyed. The base class records it only."""
         self.tx = bool(on)
 
     def set_lna(self, active: bool) -> None:
+        """Drive the LNA signal: True = LNA active (the released / low state), False = LNA
+        off (energized / high). The base class records it only."""
         self.lna = bool(active)
 
     def close(self) -> None:
+        """Release the hardware behind this output; the base class has none."""
         pass
 
 
@@ -169,10 +181,12 @@ class GpioLines(Output):
             self.fault = f"{type(e).__name__}: {e}"
 
     def set_tx(self, on: bool) -> None:
+        """Set GPIO_0 (high = transmit) and rewrite both lines to the radio."""
         self.tx = bool(on)
         self._write()
 
     def set_lna(self, active: bool) -> None:
+        """Set GPIO_1 (high = LNA off, low = LNA active) and rewrite both lines to the radio."""
         self.lna = bool(active)
         self._write()
 
@@ -193,6 +207,7 @@ class UsbRelayBoard(Output):
 
     @property
     def log(self):
+        """The log callable, kept on the underlying UsbRelayKeyer that owns the port."""
         return self._k.log
 
     @log.setter
@@ -200,6 +215,8 @@ class UsbRelayBoard(Output):
         self._k.log = fn
 
     def open(self) -> None:
+        """Open the port through the underlying keyer (baud probe, every relay off, reply
+        logged) and take over its fault text."""
         self._k.open()                       # probes the baud rate, every relay off, logs the reply
         self.fault = self._k.fault
 
@@ -238,17 +255,21 @@ class UsbRelayBoard(Output):
             self.fault = f"{type(e).__name__}: {e}"
 
     def set_tx(self, on: bool) -> None:
+        """Energize (True) or release relay 1, the TX key, with acknowledgment."""
         self.tx = bool(on)
         self._set(self.TX_RELAY, self.tx)
 
     def set_lna(self, active: bool) -> None:
+        """LNA active (True) releases relay 2; LNA off energizes it, with acknowledgment."""
         self.lna = bool(active)
         self._set(self.LNA_RELAY, not self.lna)
 
     def query(self) -> str:
+        """The board's status reply (one 'CHn:ON' / 'CHn:OFF' line per channel) or ''."""
         return self._k.query()
 
     def close(self) -> None:
+        """Release both relays (the receive state) and close the port."""
         try:
             self._set(self.TX_RELAY, False)
             self._set(self.LNA_RELAY, False)
@@ -290,6 +311,8 @@ class Sequencer(Keyer):
         return self.lna_release_s + 2.0 * slow
 
     def open(self) -> None:
+        """Open every output, then put the station in receive (TX released, LNA active)
+        whatever the hardware was left at; the outputs' faults are collected into `fault`."""
         for o in self.outputs:
             o.log = self.log
             o.open()
@@ -304,6 +327,10 @@ class Sequencer(Keyer):
         self.fault = "; ".join(f"{o.name}: {o.fault}" for o in self.outputs if o.fault)
 
     def key(self, on: bool) -> None:
+        """The sequence of design document 7.2 (D24) on every output in parallel. on:
+        LNA off, sleep lna_guard_s, TX on. off: TX off, sleep lna_release_s, LNA on.
+        The transmitter is always the last thing on and the first thing off. Output
+        faults are collected into `fault`, never raised."""
         if on:
             for o in self.outputs:
                 o.set_lna(False)
@@ -323,6 +350,8 @@ class Sequencer(Keyer):
         self._collect()
 
     def close(self) -> None:
+        """Release the transmitter and restore the LNA (the key(False) sequence), then
+        close every output."""
         try:
             self.key(False)
         except Exception:
@@ -334,6 +363,7 @@ class Sequencer(Keyer):
                 pass
 
     def status_text(self) -> str:
+        """'TX KEYED / off, LNA active / OFF | <outputs>' plus any fault."""
         s = f"TX {'KEYED' if self.keyed else 'off'}, LNA {'active' if self.lna_active else 'OFF'} | {self.name}"
         return s + (f" (fault: {self.fault})" if self.fault else "")
 
@@ -371,15 +401,16 @@ def find_relay_board(port_hint: str = "", serial_factory=None, ports=None) -> st
             continue
         seen.add(port)
         k = UsbRelayKeyer(port, 1, serial_factory=serial_factory, readback=False)
-        try:
-            k.ser = k._open_port(RELAY_BAUDS[0])
-            time.sleep(0.05)
-            txt = k.query()
-            k.ser.close()
-        except Exception:
-            continue
-        if txt.upper().startswith("CH"):
-            return port
+        for baud in RELAY_BAUDS:                 # DIUSTOU at 115200, LCUS clones at 9600
+            try:
+                k.ser = k._open_port(baud)
+                time.sleep(0.05)
+                txt = k.query()                  # framed query first, then the clones' 0xFF
+                k.ser.close()
+            except Exception:
+                break
+            if txt.upper().startswith("CH"):
+                return port
     return ""
 
 
@@ -441,6 +472,8 @@ class UsbRelayKeyer(Keyer):
                 pass
 
     def key(self, on: bool) -> None:
+        """Send the switch frame for this keyer's channel (no wait for the reply); `fault`
+        is set, not raised, if the port is not open or the write fails."""
         if self.ser is None:
             self.fault = "port not open"
             return
@@ -485,6 +518,7 @@ class UsbRelayKeyer(Keyer):
             return ""
 
     def close(self) -> None:
+        """Release the relay, then close the serial port."""
         super().close()
         if self.ser is not None:
             try:

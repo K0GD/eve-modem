@@ -91,6 +91,10 @@ The design decisions in this revision:
   B210 loopback bench: the whole chain from schedule to offline decode ran on the bench
   radio with both message passes decoded (section 5.4).
 
+The waveform is ORI's: Pete Wyckoff, KA3WCA, designed it and Michelle Thompson wrote the
+Python implementation that defines the air interface; DSES built the station side, the
+receiver and the operations around it. The Acknowledgments at the end say what we owe them.
+
 # 2. Mission context
 
 ## 2.1 Geometry on conjunction day
@@ -560,6 +564,113 @@ decision of record is the offline decode of the archive after the session.
 | 5 | EME at very low power | End-to-end decode at C/N0 near 0 dB with the station's own keying | Not started |
 | 6 | Venus, sessions from mid October | | |
 
+## 5.5 Receiver algorithms
+
+For a reviewer who wants to check the receiver against the design rather than take it on
+trust, this is what `modem.py`, `sync.py` and `decode.py` do, in the order the samples see
+it. Names are the ones in the code.
+
+**Frame metric** (`FrameBank.frame_metric`). Each frame of N_fft = 16,384 baseband samples
+at the modem rate is windowed, transformed, and reduced to the M = 4096 candidate-tone
+magnitudes (tone d at FFT bin 2d, the ORI placement). The metric of a frame is that
+4096-vector; nothing coherent survives a frame boundary, by design (section 4.1).
+
+**Symbol accumulation** (`SymbolAccumulator`). Frame k maps to (repetition r, symbol m,
+frame-within-symbol) through the schedule's frame map (`FrameMap`), pilot frames excluded.
+The accumulator adds frame metrics per (r, m); `combined()` sums the repetitions the
+operator asks for (all of them by default), `decide()` takes the arg-max tone per symbol,
+`margin_db()` is the dB gap between the winning tone and the runner-up, and `decode()`
+unpacks the 11 symbols to 132 bits (MSB first), runs the BCH(127,106) decoder with t = 3
+(`bch.py`), checks the CRC-16 (`message.py`) and returns a `DecodeOutcome` whose `ok` is
+true only when the CRC matches. The Monte Carlo in `montecarlo.py` reproduces ORI's frame
+error table with exactly this chain (section 5.4, stage 2), which is the evidence that the
+accumulation is the non-coherent sum Pete's design assumes.
+
+**Pilot** (`PilotDetector`). A window's first `pilot_frames` frames carry a known tone
+(section 4.5). `presence()` sums those frames' metrics and reports the contrast of the
+expected tone against the median of the others; `frequency()` zooms an R_bw/8 spectrum
+around it for the frequency offset; `search()` slides the frame grid over ±N frames and
+takes the offset with the best contrast, returning a `SyncEstimate` (frame shift, frequency
+offset, contrast, detected flag). At EME strength this is a solid detection; at the Venus
+design point it is a 2-sigma presence check and the timing of record is GPS plus the
+ephemeris, as section 4.5 says.
+
+**Epoch without a pilot** (`decode._epoch_shift`, `sync.grid_search`). ORI's generator
+sends no pilot, so a receive-only interop run finds the frame epoch by matching the known
+symbols of the schedule over ±N frames on the first window; the shift that maximizes the
+accumulated metric wins. Verified on synthetic offsets of 0, +4, −3 and +9 frames.
+
+**Frequency tracking** (`FrequencyTracker`). Per-frame decisions are useless at Venus SNR,
+so the tracker accumulates an exact zoomed spectrum (R_bw/8) around the tone the schedule
+says is being sent, over blocks of frames, and reports the residual offset; the receive
+chain's shift follows it. On the bench the residual is zero to two decimals; on the air it
+is what remains after the transmit pre-compensation (section 4.4).
+
+**Window processing** (`WindowReceiver.process`). One receive window at a time: optional
+pilot search, optional tracking, frame metrics into the accumulator, a `WindowResult` with
+the sync estimate and the residual. `decode_archive()` walks the archive's windows in
+schedule order, pads a window that ends within a tenth of a frame short (the B210 delivers
+49,151 samples where 49,152 were asked, section 8.2), applies the epoch search where there
+is no pilot, merges accumulators across windows (`merge_accumulators`) and returns the
+decision of record with `summarize()` for the report (section 8.4).
+
+**Thresholds.** The design 2.4 chi-square model gives, for a one-pass decode at 10 percent
+message error, −0.6 dB-Hz at 473 frames for Variant A and +11.7 dB-Hz at the 6-frame bench
+length; the application quotes the threshold for whatever length is set
+(`cn0_threshold_db`, a 6.5 dB-per-decade fit to the model within 0.7 dB).
+
+## 5.6 Process architecture and fault handling
+
+**One run, one process.** Every session runs in a worker process spawned by the
+application (`worker.py`, `multiprocessing` spawn context) with a fresh UHD; the two talk
+over a pipe with typed messages: `log`, `state` (phase text), `preview` (the schedule
+description), `session` (the schedule and radio facts for the display), `frame` (a frame's
+metric for the live view), `status` (phase, key and radio text every half second),
+`notice` (something the operator must see but that must not stop a timed run), and the
+final result. The reason is a fault in UHD 4.10 on Windows: `usrp_source`'s constructor
+dies with an access violation in about one open in five when a device is reopened, and
+a second source in one process faulted every time. The controller retries a worker that
+dies before the session exists up to three times; the window survives a worker crash and
+says so. Scripts that spawn workers carry the `if __name__ == "__main__"` guard the spawn
+context needs.
+
+**Before any RF.** The worker opens the radio, then the GPS clock preflight (the HID handle
+is closed before UHD enumerates, section 7.1), then configures the radio and refuses to
+continue without reference lock on the air; it opens the key line and puts every output in
+the receive state; it builds the schedule and runs the session preflight (chunk lengths
+against the amplifier limits, the sequencer's needed gap, the ephemeris model where the
+options require one). Any failure ends the run here with the reason in the log and on
+screen.
+
+**During the run.** The keyer thread keys T_lead plus the sequencer's settle time before
+each chunk's RF and releases T_lag after; a watchdog releases the transmitter if a chunk
+overruns the amplifier limit; a keying fault (a relay board that stops answering) is
+logged and shown in the key lamp text, and the run continues under the operator's eye
+rather than being killed mid-chunk. Abort, from the button or the watchdog, releases the
+transmitter first, then the LNA, stops the streams, and closes the archive so what was
+received is still decodable. Receive overflows are measured and zero-padded so the sample
+clock stays honest (section 8.2).
+
+**After the run.** The offline decode runs on the archive, the report PDF is written
+(section 8.4), the radio is closed with its blocks released and garbage-collected, and the
+worker exits. Faults in the decode or the report are logged and do not lose the archive.
+
+## 5.7 Test suite
+
+`tests/` (49 tests, run with `python -m pytest tests -q` in the project environment) are
+the executable form of the validation plan:
+
+<!-- widths: 1.6,5.1 -->
+| File | Covers |
+|---|---|
+| `test_eve_core.py` | Stages 0 to 2: Appendix C symbols and codeword bit-exact against ORI's generator; BCH against `galois` on encode and on up to three errors; the DSES synthesizer against ORI's equation; loopback decode on Variants A, B and the MATLAB set; the channel's C/N0 calibration; the chi-square frame model against Pete's channel; streaming decode with timing offsets, gaps and Rayleigh fading |
+| `test_eve_session.py` | Doppler and round trip from a Horizons table and from astropy; the schedule's chunking, frame map, JSON round trip and validation; pilot detection, grid search and the tracker on synthetic signals; SigMF export and import |
+| `test_eve_station_sim.py` | A whole session on the simulated radio: chunks keyed, archive windows of full length, live and offline decode of both passes, amplifier-limit preflight |
+| `test_eve_keyer.py` | Relay frames and checksums; the USB relay board against a fake port; the sequencer's order and states on both outputs; the GPIO-only fallback; board discovery |
+| `test_eve_gpsdo.py` | The GPS clock's HID report decoding and the divider planner against the vendor's plan |
+| `test_eve_display.py` | The operator panel renders headless and binds a session |
+| `test_eve_app.py` | The application end to end, headless: settings, schedule preview, a simulated run through the worker process, the report rendered, a re-decode, a second run |
+
 # 6. ICD part A — the air interface
 
 This section is the interoperability specification. It follows the ORI Python
@@ -916,6 +1027,30 @@ the DSES message. Any implementation of either variant must reproduce these symb
 The repeated callsign shows in the symbols: the first three symbols (1203, 80, 1317) recur
 as symbols 4 to 6, because 48 bits of message repeat exactly 48 bits later.
 
+
+# Acknowledgments
+
+This modem exists because the Open Research Institute (ORI) did the hard part first and
+published it under the GPL. **Pete Wyckoff, KA3WCA**, designed the Spiral #2 waveform: the
+4096-ary FSK with 2.87 Hz bins, the 473-frame non-coherent symbol, the BCH(127,106) code,
+the frame channel model and the analytic error-rate table that sized the whole link at
+0 dB-Hz. Everything in sections 4 and 6 of this document is his design restated for our
+station; where DSES departs from it (Variant B, the pilot, the chunking) the departures are
+labeled as ours. **Michelle Thompson** wrote ORI's Python implementation, the transmit
+generator and the AWGN link check that this modem's core is verified against bit for bit
+(Appendix C), maintained the link-budget classes we run unchanged (section 2.2), supplied
+the date-resolved Venus distance and the dynamic albedo that corrected our budget, and
+answered every question about which conventions were authoritative. Her code is the air
+interface this document specifies. ORI's open repository, its meetups and its willingness to
+have DSES build a receiver around its waveform are what made a Venus attempt from Haswell
+possible in one season. We could not have done this without them, and we hope the receiver
+and the station machinery here are a useful return.
+
+On the DSES side, Alex Nersesian, K6VHF, Roger Oakey, W3MIX, Bill Miller, Myron Babcock,
+Paul Sobon, David Wilson, AA0RS, William Thomas, WT0DX, Ray Uberecken and Darryl Hambly
+reviewed the drafts, built and measured the station hardware this document interfaces to,
+and moved the dish. The DEFCON group working with ORI on a receiver of their own gave us a
+second implementation to compare against (O14).
 
 # Document history
 

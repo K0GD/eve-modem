@@ -33,6 +33,8 @@ DEFAULT_MANIFEST_URL = "https://gpstime.com/sw_distribution/eve-modem/manifest.j
 
 
 def parse_version(v: str):
+    """A version string as a tuple of ints for comparison ('1.0.10' > '1.0.9'); non-digits in
+    a part are dropped and an empty part counts as 0."""
     out = []
     for part in str(v).strip().split("."):
         digits = "".join(ch for ch in part if ch.isdigit())
@@ -41,6 +43,9 @@ def parse_version(v: str):
 
 
 def friendly_check_error(exc, manifest_url: str = "") -> str:
+    """Turn an update-check exception into a message for the operator: a certificate
+    verification failure gets an explanation (the cause is usually on this PC) and the folder
+    to download from by hand; anything else is 'Type: text'."""
     reason = getattr(exc, "reason", None)
     is_cert = (isinstance(exc, ssl.SSLCertVerificationError) or isinstance(reason, ssl.SSLCertVerificationError)
                or "CERTIFICATE_VERIFY_FAILED" in str(exc))
@@ -59,6 +64,8 @@ def friendly_check_error(exc, manifest_url: str = "") -> str:
 
 
 def guide_url_from_download(download_url: str) -> str:
+    """The operator's guide PDF URL beside a release zip URL (same folder,
+    GUIDE_PDF_BASENAME), or '' when the URL has no folder part."""
     download_url = (download_url or "").strip()
     if "/" not in download_url:
         return ""
@@ -76,9 +83,14 @@ class UpdateChecker(QtCore.QObject):
         self.settings = settings                # eve.app.Settings
 
     def check_now(self) -> None:
+        """Fetch the manifest on a daemon thread; one of update_available(version, url,
+        notes), no_update(latest), or check_failed(message) follows."""
         threading.Thread(target=self._do_check, name="eve-update-check", daemon=True).start()
 
     def _do_check(self) -> None:
+        """The thread body: read manifest_url from the settings (30 s timeout, two tries),
+        record last_check_iso, compare latest_version with __version__, emit the matching
+        signal."""
         url = str(self.settings.get("manifest_url")).strip()
         if not url:
             return
@@ -113,6 +125,10 @@ class UpdateChecker(QtCore.QObject):
 
 
 class UpdateNotificationDialog(QtWidgets.QDialog):
+    """Non-modal 'Update available' dialog: the version, the release notes, the download URL,
+    and the buttons Install Update (emits install_requested(url, version)), Operator's guide
+    PDF, Download .zip, Skip this version (emits dismissed_for_version(version)), and Remind
+    me later."""
     dismissed_for_version = Signal(str)
     install_requested = Signal(str, str)
 
@@ -167,6 +183,7 @@ class UpdateNotificationDialog(QtWidgets.QDialog):
 
 
 def QtGui_open(url: str) -> None:
+    """Open `url` in the desktop browser (a no-op for an empty URL)."""
     from PySide6 import QtGui
     if url:
         QtGui.QDesktopServices.openUrl(QtCore.QUrl(url))
@@ -222,18 +239,26 @@ class InstallUpdateDialog(QtWidgets.QDialog):
         lay.addWidget(bb)
 
     def _choose(self) -> None:
+        """'Choose folder' button: pick the parent folder for a new copy."""
         d = QtWidgets.QFileDialog.getExistingDirectory(self, "Install into folder", str(self._new_parent))
         if d:
             self._new_parent = Path(d)
             self._folder_lbl.setText(d)
 
     def result_choice(self):
+        """The operator's choice as (mode, destination, make_shortcut): ('in_place',
+        current_dir, False) or ('new_copy', parent_folder, shortcut_ticked)."""
         if self._rb_new.isChecked():
             return ("new_copy", self._new_parent, self._shortcut.isChecked())
         return ("in_place", self._current_dir, False)
 
 
 class UpdateInstaller(QtCore.QObject):
+    """Download, verify, extract, and install a release on a daemon thread, reporting with
+    the signals status(text), progress(bytes_done, bytes_total), and done(ok, message,
+    install_path). `mode` is 'in_place' (updater.install_in_place over `dest`, with a backup)
+    or 'new_copy' (updater.install_new_copy under `dest`, with a desktop shortcut when
+    `make_shortcut`)."""
     progress = Signal(int, int)
     status = Signal(str)
     done = Signal(bool, str, str)
@@ -243,9 +268,13 @@ class UpdateInstaller(QtCore.QObject):
         self._url, self._mode, self._dest, self._shortcut, self._version = download_url, mode, Path(dest), make_shortcut, version_label
 
     def start(self) -> None:
+        """Run the install on a daemon thread; watch the signals for progress and the result."""
         threading.Thread(target=self._run, name="eve-update-install", daemon=True).start()
 
     def _run(self) -> None:
+        """The thread body: download to a temporary folder, verify against the .sha256
+        sidecar, extract, install per mode, emit done; the temporary folder is removed either
+        way."""
         import tempfile
         tmp = Path(tempfile.mkdtemp(prefix="eve_update_"))
         try:
@@ -274,6 +303,8 @@ class UpdateInstaller(QtCore.QObject):
 
 
 def create_desktop_shortcut(install_dir: Path) -> None:
+    """Run the install's shortcut script (install-shortcut.ps1 on Windows,
+    install-shortcut.command elsewhere) for a new copy; a failure is printed, not raised."""
     install_dir = Path(install_dir)
     try:
         if sys.platform == "win32":

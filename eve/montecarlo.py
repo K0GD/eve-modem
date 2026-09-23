@@ -27,6 +27,8 @@ from . import modem, channel
 
 
 def fer_from_ser(ser: float, n_sym: int) -> float:
+    """Frame (message) error rate from the symbol error rate, 1 - (1 - SER)^n_sym: ORI's
+    approximation that any wrong 4096-ary symbol defeats the t = 3 BCH code."""
     return 1.0 - (1.0 - ser) ** n_sym
 
 
@@ -71,7 +73,12 @@ def fer_stream(cn0_db: float, params: EveParams, n_frames: Optional[int] = None,
                f_offset_hz: float = 0.0, f_rate_hz_s: float = 0.0, delay_samples: int = 0,
                gaps: Sequence = (), rayleigh: bool = False, frame_phase: bool = True,
                seed: int = 0, restrict_last: bool = False) -> float:
-    """Whole-message frame error rate through the streaming chain."""
+    """Whole-message frame error rate through the streaming chain: the text is encoded and
+    synthesized at the modem rate, passed `trials` times through a StreamChannel at cn0_db
+    (dB-Hz) with the Doppler offset (Hz) and rate (Hz/s), timing offset (samples), gaps
+    ((t_start, t_stop) seconds), per-frame phase and Rayleigh options (seed + trial index
+    per run), and demodulated on the nominal grid. A trial fails unless the decode is ok
+    and the text matches; returns the failed fraction."""
     p = params if n_frames is None else replace(params, n_frames=n_frames)
     _, _, syms = modem.encode_message(text, p)
     x = modem.synthesize_message(syms, p)
@@ -87,6 +94,9 @@ def fer_stream(cn0_db: float, params: EveParams, n_frames: Optional[int] = None,
 
 def table(params: EveParams, cn0_list: Sequence[float], trials_chi2: int = 3000,
           trials_frames: int = 0, rayleigh: bool = True) -> str:
+    """ORI-style text table: for each C/N0 in dB-Hz the chi-square SER, the FER and a verdict
+    (closes below 0.1 FER, marginal below 0.5, otherwise fails), with Pete Wyckoff's frame
+    channel (Rayleigh or AWGN) in two more columns when trials_frames > 0."""
     lines = [f"{params.summary()}",
              f"{'C/N0 dB-Hz':>10} {'SER chi2':>9} {'FER':>7}  verdict" +
              (f"  {'SER frames':>10} {'FER':>7} ({'Rayleigh' if rayleigh else 'AWGN'})" if trials_frames else "")]
@@ -103,6 +113,8 @@ def table(params: EveParams, cn0_list: Sequence[float], trials_chi2: int = 3000,
 
 
 def main(argv=None):
+    """Command-line entry (python -m eve.montecarlo): --variant, --cn0 list, --trials,
+    --frames-trials and --awgn, then prints table()."""
     ap = argparse.ArgumentParser(description="EVE link Monte Carlo (ORI model + Pete's channel)")
     ap.add_argument("--variant", default="A")
     ap.add_argument("--cn0", type=float, nargs="*", default=[-3, -2, -1.33, -1, 0, 0.65, 1, 2])

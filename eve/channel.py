@@ -63,7 +63,13 @@ def pete_tone_frames(d: int, params: EveParams, n_frames: int) -> np.ndarray:
 
 @dataclass
 class StreamChannel:
-    """Streaming channel at sample rate fs for a tone of amplitude `amplitude`."""
+    """Streaming channel at sample rate fs (default the modem rate) for a tone of amplitude
+    `amplitude` (default the waveform's): complex AWGN sized so that tone has C/N0 = cn0_db
+    (dB-Hz), a Doppler ramp f_offset_hz + f_rate_hz_s x t, a delay in samples, gaps in
+    seconds where the signal is blanked, and Pete Wyckoff's per-frame random phase and
+    Rayleigh fading (his 1.05 dB correction is applied here as extra noise). Stage 3 of the
+    validation plan (design document 5.4); frames are counted from the start of each
+    apply() block."""
     params: EveParams
     cn0_db: float
     fs: Optional[float] = None

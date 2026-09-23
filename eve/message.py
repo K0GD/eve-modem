@@ -34,10 +34,12 @@ def crc16_ccitt(bits) -> int:
 
 
 def int_to_bits(value: int, width: int) -> np.ndarray:
+    """Unsigned integer -> `width` bits as a uint8 array, most significant bit first."""
     return np.array([(value >> (width - 1 - i)) & 1 for i in range(width)], dtype=np.uint8)
 
 
 def bits_to_int(bits) -> int:
+    """Bit sequence, most significant bit first -> unsigned integer; inverse of int_to_bits."""
     v = 0
     for b in np.asarray(bits, dtype=np.uint8):
         v = (v << 1) | int(b)
@@ -72,6 +74,9 @@ def build_payload(text: str) -> np.ndarray:
 
 @dataclass
 class PayloadCheck:
+    """What verify_payload() returns: ok is True when the received CRC equals the CRC
+    computed over the 90 message bits; text is the decoded message; both CRC values are
+    kept for the log."""
     ok: bool
     text: str
     crc_received: int
@@ -79,6 +84,9 @@ class PayloadCheck:
 
 
 def verify_payload(payload) -> PayloadCheck:
+    """Split a 106-bit payload (the message bits bch.decode() returns) into 90 message bits
+    and 16 CRC bits, recompute the CRC-16-CCITT over the message bits and compare (design
+    document 6.3, last step). Raises ValueError for any other length."""
     p = np.asarray(payload, dtype=np.uint8).ravel()
     if p.size != PAYLOAD_BITS:
         raise ValueError(f"payload must be {PAYLOAD_BITS} bits, got {p.size}")
@@ -88,6 +96,9 @@ def verify_payload(payload) -> PayloadCheck:
 
 
 def bits_str(bits, group: Optional[int] = 8) -> str:
+    """Bits as a string of 0/1 characters in space-separated groups of `group` bits (8 by
+    default; None or 0 for one unbroken string), the form used in the design document's
+    Appendix C test vector."""
     s = "".join(str(int(b)) for b in np.asarray(bits).ravel())
     if not group:
         return s

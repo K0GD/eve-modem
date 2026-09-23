@@ -10,7 +10,9 @@
 | Companion | DSES EVE Modem Design Description and ICD (Rev C): the why behind every setting |
 | Where it lives | This text is the application's Help → Operator's guide, and `docs/DSES_EVE_Modem_Operators_Guide.pdf` |
 
-This guide is for the person at the keyboard at Haswell. It says what to connect, what
+The waveform this program sends and receives is the Open Research Institute's Spiral #2,
+designed by Pete Wyckoff, KA3WCA, with the reference implementation by Michelle Thompson;
+the station software is DSES's. This guide is for the person at the keyboard at Haswell. It says what to connect, what
 to click, what to watch, and what to do when something is wrong. The design document
 explains the reasons; this one gives the steps.
 

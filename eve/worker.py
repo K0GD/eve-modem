@@ -42,12 +42,18 @@ TARGET = {"sim": "sim", "bench": "bench", "interop": "partner", "eme": "moon", "
 
 
 class Runner:
+    """One job: build the radio, ephemeris, schedule, keyer, and session from a settings
+    dict, run it, decode the archive, and write the report, reporting through `send` (a
+    callable taking the pipe tuples listed in the module docstring). `poll_abort` returns the
+    abort reason when the GUI asked for one, else None. Used in-process by the tools and
+    tests, and by run_job in the worker process."""
     def __init__(self, send, poll_abort=None):
         self.send = send                    # callable(tuple)
         self.poll_abort = poll_abort        # callable() -> Optional[str]
         self.session = None
 
     def say(self, s: str) -> None:
+        """Send a ("log", s) message: one session log line."""
         self.send(("log", s))
 
     def phase(self, text: str, kind: str = "busy") -> None:
@@ -56,6 +62,17 @@ class Runner:
 
     # ---- the job -------------------------------------------------------------------------
     def run(self, cfg: Dict, preview_only: bool = False) -> Dict:
+        """Run one job from `cfg` (the Setup form as EveApp._values() builds it) and return
+        {ok, pdf, session_id, summary, aborted}, or {ok: False, error, pdf: None} on any
+        exception. Steps: parameters and archive folder; the radio (SimRadio for sim,
+        otherwise EveRadio, opened before the GPS clock preflight); the start time and the
+        ephemeris model (synthetic tables for sim, bench, and interop; JPL Horizons or
+        astropy for the Moon and Venus, saved as <sid>_<target>_haswell.csv); the schedule
+        (design 4.1, 4.2, 6.4), refused when a chunk cannot hold pilot + 2 frames. With
+        preview_only the description is sent as ("preview", text) and the job ends. Otherwise
+        the schedule JSON is written, the keyer opened (a missing USB board sends a notice
+        and the GPIO lines carry on), the session preflighted and run beside a status thread,
+        and decode_and_report finishes the job."""
         radio = None
         gps_text = ""
         result: Dict = {"ok": False, "pdf": None}
@@ -193,8 +210,6 @@ class Runner:
             from . import keyer as _keyer
             kind = {"B210 GPIO": "gpio", "USB relay board": "usb_relay", "gpio": "gpio", "usb_relay": "usb_relay",
                     "sequencer": "sequencer"}.get(cfg.get("keyer_kind", "none"), "none")
-            if kind not in ("none",) and not kind.startswith("seq") and kind != "usb_relay" and kind != "gpio":
-                kind = "none"
             if kind != "none":
                 self.send(("state", "finding the USB relay board / setting the GPIO lines"))
             key = _keyer.make_keyer(kind, radio=radio, port=cfg.get("keyer_port", ""), log=self.say,
@@ -326,6 +341,12 @@ class Runner:
                 pass
 
     def decode_and_report(self, archive: Path, sched, extra=None, search: int = 0) -> Dict:
+        """Offline decode of the archived receive windows (eve.decode, the decision of
+        record, design 5.3) and the session report PDF (eve.report, 8.4) for schedule `sched`
+        in `archive`. `extra` lines go into the report header; `search` is the epoch search
+        range in frames (30 by default for a bistatic_rx schedule). Returns {ok, pdf,
+        session_id, summary}; a decode or report failure is logged and leaves summary None or
+        pdf None."""
         from .decode import decode_archive, summarize
         from .report import write_report
         self.send(("state", "decoding"))
@@ -364,6 +385,8 @@ class Runner:
         return {"ok": ok, "pdf": str(pdf) if pdf else None, "session_id": sched.session_id, "summary": summary}
 
     def redecode(self, session_json: Path) -> Dict:
+        """Re-run decode_and_report on an archived session from its schedule JSON (the Report
+        tab's Re-decode); returns the result dict, {ok: False, error} on failure."""
         try:
             sched = S.Schedule.from_json(session_json)
             return self.decode_and_report(session_json.parent, sched)
@@ -376,6 +399,10 @@ class Runner:
 
 # ---- process target ------------------------------------------------------------------------
 def run_job(cfg: Dict, preview_only: bool, conn, redecode: Optional[str] = None) -> None:
+    """The multiprocessing (spawn) target: enable faulthandler into fault.log under
+    log_dir(), run Runner.run(cfg, preview_only) or, with `redecode` set to a schedule JSON
+    path, Runner.redecode, sending every message down `conn` and polling it for ("abort",
+    reason); ends with ("finished", result) and closes the pipe."""
     import faulthandler
     try:
         from . import log_dir

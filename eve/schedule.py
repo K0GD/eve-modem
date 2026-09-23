@@ -33,6 +33,9 @@ SCHEMA = "dses-eve-schedule/1"
 
 @dataclass
 class Chunk:
+    """One row of the chunk table (design document 6.4, 8.1, D18): transmitted frames
+    frame_first..frame_last inclusive, sent during [tx_start, tx_stop), whose echo is
+    expected during [rx_start, rx_stop). Times are Unix seconds (UTC)."""
     index: int
     frame_first: int
     frame_last: int
@@ -43,15 +46,18 @@ class Chunk:
 
     @property
     def n_frames(self) -> int:
+        """Frames in the chunk (the range is inclusive)."""
         return self.frame_last - self.frame_first + 1
 
     def to_dict(self) -> Dict:
+        """The schedule-file row, times as ISO UTC text."""
         return {"index": self.index, "frame_first": self.frame_first, "frame_last": self.frame_last,
                 "tx_start_utc": iso_utc(self.tx_start), "tx_stop_utc": iso_utc(self.tx_stop),
                 "rx_start_utc": iso_utc(self.rx_start), "rx_stop_utc": iso_utc(self.rx_stop)}
 
     @classmethod
     def from_dict(cls, d: Dict) -> "Chunk":
+        """A Chunk from a schedule-file row."""
         return cls(int(d["index"]), int(d["frame_first"]), int(d["frame_last"]),
                    to_unix(d["tx_start_utc"]), to_unix(d["tx_stop_utc"]),
                    to_unix(d["rx_start_utc"]), to_unix(d["rx_stop_utc"]))
@@ -59,6 +65,13 @@ class Chunk:
 
 @dataclass
 class Schedule:
+    """The session contract of design document 8.1 in memory: who transmits and who
+    receives, the waveform (EveParams), the message text and its symbols (packed and
+    BCH-encoded by modem.encode_message under ORI's conventions), the repeat count and
+    pilot flag, the chunk table, the Doppler source and convention (6.5), and the
+    amplifier limits in seconds. `epoch` is frame 0's transmit start in Unix seconds.
+    to_dict / from_dict are the JSON contract with a partner station; validate() the
+    consistency checks. Frame numbering follows the module docstring (D18)."""
     session_id: str
     target: str
     epoch: float                              # unix seconds, frame 0 transmit start
@@ -86,37 +99,48 @@ class Schedule:
     # ---- frame arithmetic ------------------------------------------------------------
     @property
     def n_frames_total(self) -> int:
+        """Frames the chunk table covers (last frame number + 1)."""
         return self.chunks[-1].frame_last + 1 if self.chunks else 0
 
     @property
     def n_frames_wanted(self) -> int:
+        """Frames for repeat_count whole messages (repeat_count x N_frames x N_sym)."""
         return self.repeat_count * self.params.n_frames_msg
 
     def chunk_of_frame(self, k: int) -> Optional[Chunk]:
+        """The chunk carrying frame k, or None."""
         for c in self.chunks:
             if c.frame_first <= k <= c.frame_last:
                 return c
         return None
 
     def frame_tx_time(self, k: int) -> float:
+        """Transmit start of frame k in Unix seconds: its chunk's tx_start + (k -
+        frame_first) x T_frame (6.4). ValueError if no chunk carries k."""
         c = self.chunk_of_frame(k)
         if c is None:
             raise ValueError(f"frame {k} is not in any chunk")
         return c.tx_start + (k - c.frame_first) * self.params.t_frame
 
     def on_windows(self) -> List[Tuple[int, int]]:
+        """(frame_first, frame_last) per chunk: the FrameMap's on-window list."""
         return [(c.frame_first, c.frame_last) for c in self.chunks]
 
     def frame_map(self) -> modem.FrameMap:
+        """The modem.FrameMap for this schedule (symbols, on-windows, pilot, repeat count):
+        frame number to tone, including the pilot frames at each chunk start."""
         return modem.FrameMap(self.symbols, self.params, on_windows=self.on_windows(),
                               pilot=self.pilot_enabled, repeat_count=self.repeat_count)
 
     @property
     def t_start(self) -> float:
+        """The first chunk's transmit start, Unix seconds."""
         return self.chunks[0].tx_start
 
     @property
     def t_end(self) -> float:
+        """End of the last chunk's receive window (or of its transmission, if later),
+        Unix seconds."""
         return max(self.chunks[-1].rx_stop, self.chunks[-1].tx_stop)
 
     def messages_complete(self) -> int:
@@ -125,6 +149,7 @@ class Schedule:
 
     # ---- JSON ------------------------------------------------------------------------
     def to_dict(self) -> Dict:
+        """The schedule-file dictionary (schema dses-eve-schedule/1, design document 8.1)."""
         return {
             "schema": SCHEMA,
             "session_id": self.session_id,
@@ -149,6 +174,7 @@ class Schedule:
         }
 
     def to_json(self, path: Optional[Union[str, Path]] = None) -> str:
+        """JSON text of to_dict(); also written to `path` when given."""
         s = json.dumps(self.to_dict(), indent=2)
         if path:
             Path(path).write_text(s + "\n", encoding="utf-8")
@@ -156,6 +182,10 @@ class Schedule:
 
     @classmethod
     def from_dict(cls, d: Dict) -> "Schedule":
+        """Rebuild a Schedule from a schedule-file dictionary and validate it. The waveform
+        block's f_if_hz falls back to rf.f_if_hz; the pilot block overrides the waveform's
+        pilot frames and tone; a receiver entry without coordinates means the transmitter's
+        site. ValueError on another schema or a failed validation."""
         if d.get("schema") != SCHEMA:
             raise ValueError(f"unsupported schedule schema {d.get('schema')!r}")
         wf = dict(d["waveform"])
@@ -191,6 +221,7 @@ class Schedule:
 
     @classmethod
     def from_json(cls, src: Union[str, Path]) -> "Schedule":
+        """From a JSON file path, or from the JSON text itself when no such file exists."""
         p = Path(src)
         txt = p.read_text(encoding="utf-8") if p.exists() else str(src)
         return cls.from_dict(json.loads(txt))
@@ -281,6 +312,12 @@ def build_schedule(session_id: str, target: str, model: DopplerModel, t_start, f
                    t_on_max_s: float = 300.0, t_off_min_s: float = 240.0, chunk_s: Optional[float] = 240.0,
                    rtt_guard_s: float = 30.0, t_stop=None, doppler_table: str = "",
                    notes: str = "") -> Schedule:
+    """Plan and validate a complete Schedule: encode `text` under `params` (default
+    Variant A) into its symbols, lay repeat_count messages' worth of frames into chunks
+    from t_start with plan_chunks() (mode monostatic, bistatic_tx or bistatic_rx), and fill
+    in the sites, the dial frequency (Hz), the limits and chunk length (seconds), the
+    Doppler source name taken from the model's table, and the notes. ValueError when no
+    chunk fits before t_stop or the result fails validate()."""
     p = params or EveParams.variant_a()
     payload, cw, syms = modem.encode_message(text, p)
     t0 = to_unix(t_start)
@@ -301,6 +338,9 @@ def build_schedule(session_id: str, target: str, model: DopplerModel, t_start, f
 
 
 def describe(sched: Schedule, model: Optional[DopplerModel] = None) -> str:
+    """Human-readable summary: two header lines, then one line per chunk (frames, transmit
+    and receive windows, round trip) with elevation, Doppler and Doppler rate at the chunk
+    start when a model is given."""
     p = sched.params
     lines = [f"{sched.session_id}: {sched.target}, {sched.mode}, f_dial {sched.f_dial_hz / 1e6:.4f} MHz, "
              f"variant {p.variant}, message '{sched.text}', repeat {sched.repeat_count}, pilot {'on' if sched.pilot_enabled else 'off'}",

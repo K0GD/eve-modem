@@ -93,6 +93,11 @@ def write_sigmf(iq: np.ndarray, fs: float, base: Union[str, Path], params: EvePa
 
 @dataclass
 class SigmfRecording:
+    """What read_sigmf() returns: the complex64 IQ, the file rate fs (S/s), the capture's
+    RF frequency (Hz), the full metadata dictionary, the EveParams implied by ori:design
+    (None when the file has no such block), the symbols, the comb offset above the dial
+    (Hz), the symbol time (s) and the payload text from that block, and the embedded
+    dses:schedule dictionary if there is one."""
     iq: np.ndarray
     fs: float
     rf_freq_hz: float
@@ -106,10 +111,17 @@ class SigmfRecording:
 
     @property
     def data_valid(self) -> bool:
+        """False only when the SHA-512 was checked and did not match; True when it matched
+        or was not checked."""
         return bool(self.meta.get("_sha_ok", True))
 
 
 def read_sigmf(base: Union[str, Path], verify_sha: bool = True, mmap: bool = False) -> SigmfRecording:
+    """Read base.sigmf-data / base.sigmf-meta (base may carry either suffix): cf32_le
+    only, the data memory-mapped when mmap is set, the SHA-512 checked against
+    core:sha512 unless verify_sha is False (result in data_valid). The waveform
+    parameters come from the ori:design block through params_from_ori_design(), so an
+    ORI file from eve_tx_sigmf.py and a DSES export read the same way (8.3)."""
     data_path, meta_path = _paths(base)
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     g = meta["global"]

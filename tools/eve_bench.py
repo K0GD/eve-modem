@@ -33,6 +33,11 @@ from eve.decode import decode_archive  # noqa: E402
 
 
 def main(argv=None):
+    """Parse the options, optionally preflight the GPS clock, open the B210, build a bench
+    schedule (bistatic chunking against a synthetic range, first chunk --lead seconds from
+    now), write it to the archive, run the session (with the operator window under
+    --display), then decode the archive offline and print the verdict. Returns 0 on a decode,
+    1 on a failed decode, 3 when the GPS clock is not locked."""
     ap = argparse.ArgumentParser(description="EVE B210 loopback bench")
     ap.add_argument("--variant", default="A")
     ap.add_argument("--n-frames", type=int, default=6)

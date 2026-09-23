@@ -117,6 +117,9 @@ class OperatorPanel(QtWidgets.QWidget):
 
     # ---- layout -----------------------------------------------------------------------------
     def _build(self):
+        """Build the panel: header (title, phase badge, clocks), tone strip and accumulated
+        spectrum on the left, decisions table, schedule with the key lamp, radio and
+        ephemeris with ABORT on the right, the log below; tooltips on every group."""
         outer = QtWidgets.QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
 
@@ -275,10 +278,12 @@ class OperatorPanel(QtWidgets.QWidget):
         wrap_tooltips(self)
 
     def _abort_clicked(self):
+        """ABORT button: ask the bound session to abort."""
         if self.session is not None:
             self.session.abort("operator abort from the display")
 
     def _lamp(self, on: bool):
+        """Paint the key lamp red 'KEY DOWN' or grey 'key up'."""
         self.key_lamp.setStyleSheet(
             "font-size: 16px; font-weight: bold; padding: 6px; border-radius: 4px; color: white; background: "
             + ("#c0392b" if on else "#7f8c8d") + ";")
@@ -298,6 +303,7 @@ class OperatorPanel(QtWidgets.QWidget):
             self.lbl_phase.setText(text)
 
     def _show_idle(self):
+        """Reset the header and the panes to the no-session state."""
         self.lbl_title.setText("no session")
         self.set_phase("idle", "idle")
         self.lbl_sched.setText("Set up a run on the Setup tab and press Start.")
@@ -347,6 +353,8 @@ class OperatorPanel(QtWidgets.QWidget):
         self._refresh_radio()
 
     def unbind(self):
+        """Detach the session: remove the frame listener, drop the session, radio, and model
+        references, disable ABORT. What is drawn stays."""
         if self.session is not None:
             try:
                 self.session.listeners.remove(self._on_frame)
@@ -359,17 +367,25 @@ class OperatorPanel(QtWidgets.QWidget):
 
     # ---- data in ------------------------------------------------------------------------------
     def _on_frame(self, k: int, x: np.ndarray, metric: np.ndarray):
+        """Session listener (called from the sink's worker thread): queue (k, metric) for the
+        GUI timer; a full queue drops the frame."""
         try:
             self._q.put_nowait((int(k), np.asarray(metric, dtype=np.float32)))
         except queue.Full:
             pass
 
     def append_log(self, text: str):
+        """Queue a time-stamped line for the log pane (thread-safe; drained by the refresh
+        timer). Sessions call this as their log function."""
         with self._log_lock:
             self._log_lines.append(f"{iso_utc(time.time(), 0)[11:19]}  {text}")
 
     # ---- refresh ----------------------------------------------------------------------------
     def _refresh(self):
+        """GUI timer (refresh_ms): flush queued log lines; with a session bound, drain queued
+        frames into the tone strip (8:1 max-collapse, log10 relative to the median), redraw
+        the accumulated metric of the symbol the latest frame belongs to with the expected
+        and leading tones marked, then update the decisions table and the schedule pane."""
         with self._log_lock:
             lines, self._log_lines = self._log_lines, []
         for line in lines[-200:]:
@@ -416,6 +432,9 @@ class OperatorPanel(QtWidgets.QWidget):
         self._refresh_schedule()
 
     def _refresh_decisions(self):
+        """Rewrite the running-decisions table from the session's SymbolAccumulator (leader,
+        margin dB, frames, check mark per symbol), keep the symbol being decided in view, and
+        show the live decode line (BCH, CRC, text)."""
         acc = self.session.acc
         if acc is None or not acc.acc:
             return
@@ -460,6 +479,9 @@ class OperatorPanel(QtWidgets.QWidget):
             self.lbl_decode.setText(f"decode error: {e}")
 
     def _refresh_schedule(self):
+        """Rewrite the clock line, phase badge, ABORT enable, key lamp, and the schedule pane
+        (current or next chunk, chunks complete, time remaining, frames wanted vs received)
+        from the radio's device time."""
         s = self.sched
         try:
             now = self.radio.device_time()
@@ -501,6 +523,9 @@ class OperatorPanel(QtWidgets.QWidget):
         self.lbl_sched.setText("\n".join(lines))
 
     def _refresh_radio(self):
+        """1 s timer: the radio status block (EveRadio.status(), or the session's status
+        text), the GPS clock line (the worker's text, or a local Leo Bodnar query for an
+        in-process session), and the ephemeris line (the worker's text, or the model)."""
         if self.session is None:
             return
         try:
@@ -571,6 +596,7 @@ class OperatorWindow(QtWidgets.QMainWindow):
         self._t.start(250)
 
     def append_log(self, text: str):
+        """Queue a log line on the panel."""
         self.panel.append_log(text)
 
     def __getattr__(self, name):
@@ -581,6 +607,8 @@ class OperatorWindow(QtWidgets.QMainWindow):
         return getattr(panel, name)
 
     def _maybe_quit(self):
+        """GUI timer: quit the application 1.5 s after the session thread reported done (see
+        run_with_display)."""
         if self._done_at is not None and self._quit_app is not None and time.monotonic() - self._done_at > 1.5:
             self._quit_app.quit()
             self._quit_app = None

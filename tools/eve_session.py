@@ -35,6 +35,9 @@ from eve.doppler import iso_utc  # noqa: E402
 
 
 def cmd_plan(a):
+    """The `plan` subcommand: build the ephemeris model for --target from --start to --stop
+    (or 8 h), build the schedule (design 4.1, 4.2, 8.1), print it, and with --out write
+    <session_id>.json and the ephemeris CSV there. Returns 0."""
     site = D.DSES_HASWELL
     t0 = D.to_unix(a.start)
     t1 = D.to_unix(a.stop) if a.stop else t0 + 8 * 3600
@@ -60,6 +63,8 @@ def cmd_plan(a):
 
 
 def _shift_to_now(sched: S.Schedule, model, lead_s: float) -> S.Schedule:
+    """Rebuild `sched` so its first chunk starts `lead_s` seconds from now (chunks recomputed
+    from the model), for rehearsals of a planned schedule."""
     now = time.time()
     return S.build_schedule(sched.session_id, sched.target, model, now + lead_s, sched.f_dial_hz, params=sched.params,
                             text=sched.text, repeat_count=sched.repeat_count, mode=sched.mode,
@@ -68,6 +73,11 @@ def _shift_to_now(sched: S.Schedule, model, lead_s: float) -> S.Schedule:
 
 
 def cmd_run(a):
+    """The `run` subcommand: load a schedule JSON and its ephemeris table (or refetch the
+    model), optionally shift it to now and preflight the GPS clock, open the B210 with the
+    given gains, clock, and time source, check the PPS, run the session (operator window
+    under --display), and print the report. Returns 0, 1 when aborted, 2 when the PPS did not
+    verify, 3 when the GPS clock is not locked."""
     from eve.station import Session, SessionOptions
     from eve.radio import EveRadio, RadioConfig
     sched = S.Schedule.from_json(a.schedule)
@@ -109,6 +119,9 @@ def cmd_run(a):
 
 
 def cmd_sim(a):
+    """The `sim` subcommand: a short schedule through SimRadio (delay line plus AWGN at
+    --cn0) starting 3 s from now, written to --archive and run without real-time pacing;
+    prints the session report. Returns 0."""
     from eve.station import Session, SessionOptions, SimRadio
     p = replace(EveParams.named(a.variant), n_frames=a.n_frames, pilot_frames=a.pilot_frames)
     site = D.DSES_HASWELL
@@ -130,6 +143,8 @@ def cmd_sim(a):
 
 
 def _run(sess, a):
+    """Run the session with the operator window when the arguments ask for --display (with
+    the hidden --screenshot options), else headless."""
     if getattr(a, "display", False):
         from eve.display import run_with_display
         return run_with_display(sess, screenshot=getattr(a, "screenshot", None),
@@ -138,6 +153,8 @@ def _run(sess, a):
 
 
 def _print_report(rep):
+    """Print the SessionReport's times, keying and frame counts, receive statistics, and live
+    decode."""
     print(f"\nsession {rep.session_id}: {rep.started_utc} .. {rep.finished_utc}, aborted={rep.aborted} {rep.abort_reason}")
     print(f"  chunks keyed {rep.chunks_keyed}, tone samples on {rep.tone_samples_on}, frames sent {rep.frames_sent}")
     print(f"  rx: {rep.rx}")
@@ -145,6 +162,8 @@ def _print_report(rep):
 
 
 def main(argv=None):
+    """Command line: the subcommands plan, run, and sim (module docstring); returns the
+    subcommand's exit code."""
     ap = argparse.ArgumentParser(description="EVE session planner / runner / software bench")
     sub = ap.add_subparsers(dest="cmd", required=True)
 

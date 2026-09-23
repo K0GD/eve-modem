@@ -11,7 +11,7 @@ modem core (design document 4.3 to 4.5, 5.1, 6.4).
                       smoothed over frames; feeds the receive NCO.
   WindowReceiver      one receive window end to end: Doppler removal, sync, frame
                       accumulation into a SymbolAccumulator (repeat-and-combine happens
-                      there, across windows and sessions via merge()).
+                      there, across windows and sessions via merge_accumulators()).
 """
 from __future__ import annotations
 
@@ -64,6 +64,10 @@ def frame_spectra(x: np.ndarray, params: EveParams, offset: int = 0, n_frames: O
 # ---- pilot -------------------------------------------------------------------------------
 @dataclass
 class SyncEstimate:
+    """What PilotDetector.search() found in one receive window: the sample offset of the
+    frame grid, the frequency offset in Hz to remove, the pilot power sum and its contrast
+    in sigma, whether that contrast cleared the detection threshold, and the whole-frame
+    shift from the nominal epoch."""
     sample_offset: int          # window start on the frame grid (whole-frame steps from nominal)
     f_offset_hz: float          # residual frequency offset (positive = received high)
     metric: float               # pilot power sum at the best hypothesis
@@ -131,6 +135,10 @@ class PilotDetector:
         return float(acc[j]), (float(acc[j]) - med) / sd, j - wide
 
     def frequency(self, x: np.ndarray, offset: int) -> float:
+        """Frequency offset of the pilot in Hz: the power of the pilot_frames frames starting
+        at sample offset is summed in a zoom-times zero-padded FFT and the peak taken within
+        +/- max_hz of the pilot bin, resolution R_bw / zoom (design document 4.5). Positive
+        means the signal arrived high; 0.0 when not even one whole frame is available."""
         p = self.p
         S = frame_spectra(x, p, offset, p.pilot_frames, self.zoom)
         if S.shape[0] == 0:
@@ -143,6 +151,13 @@ class PilotDetector:
         return (j - half) * p.r_bw / self.zoom
 
     def search(self, x: np.ndarray, nominal_offset: int = 0, first_symbol: Optional[int] = None) -> SyncEstimate:
+        """The full pilot search on modem-rate samples x whose frame grid nominally starts at
+        sample nominal_offset: (1) the frequency offset at the nominal grid, (2) the
+        whole-frame shift within +/- max_frames that maximizes the pilot's power sum minus
+        the power in the edge_frames frames just before it (and, when first_symbol is given,
+        plus that tone's power just after the pilot minus the same tone over the pilot's last
+        edge_frames frames), (3) presence and a refined frequency at the chosen grid. Returns
+        a SyncEstimate; detected means contrast >= detect_sigma."""
         p = self.p
         n = p.n_fft
         # 1. frequency offset at the nominal grid, then work on the exact bins
@@ -237,6 +252,8 @@ class FrequencyTracker:
 
     @property
     def f_offset_hz(self) -> float:
+        """The running frequency correction in Hz accumulated so far (gain x residual per
+        block); positive = received high, so the caller removes it with shift_hz(x, fs, -f)."""
         return self.f_total_hz
 
     def zoom_power(self, frame: np.ndarray, tone: int) -> np.ndarray:
@@ -246,6 +263,13 @@ class FrequencyTracker:
         return np.abs(self._E @ demod) ** 2
 
     def update(self, frame: np.ndarray, tone: Optional[int] = None, X_abs: Optional[np.ndarray] = None) -> Optional[float]:
+        """Feed one time-domain frame (n_fft samples at the modem rate, already corrected by
+        f_offset_hz). tone is the expected tone index from the schedule, or None to follow
+        the strongest candidate accumulated over the current block; X_abs is the frame's
+        |FFT| when the caller has it. Returns None until the block is full, then the block's
+        residual in bins (peak on the R_bw / zoom grid with a parabolic refinement), or None
+        when the peak is below min_snr times the median candidate power; a returned residual
+        has already been added (times gain, in Hz) to f_offset_hz."""
         p = self.p
         if X_abs is None:
             X_abs = np.abs(np.fft.fft(frame))
@@ -283,6 +307,9 @@ class FrequencyTracker:
 # ---- one receive window ----------------------------------------------------------------------
 @dataclass
 class WindowResult:
+    """Summary of one processed receive window: the first frame number, the whole frames
+    available, the pilot's SyncEstimate (None without a pilot search), the total residual
+    frequency removed in Hz (pilot plus tracker), and the frames filed into the accumulator."""
     k_first: int
     n_frames: int
     sync: Optional[SyncEstimate]
@@ -315,6 +342,13 @@ class WindowReceiver:
     def process(self, x: np.ndarray, k_first: int, fs: Optional[float] = None,
                 doppler_hz: Optional[Callable[[np.ndarray], np.ndarray]] = None, t0: float = 0.0,
                 nominal_offset: int = 0) -> WindowResult:
+        """Run one receive window. x are samples at fs (default the modem rate) in which
+        frame k_first nominally starts at sample nominal_offset; doppler_hz(t), if given, is
+        removed first (t counted from t0 seconds). With a pilot in the frame map and
+        use_pilot, the pilot search sets the grid offset and removes the frequency offset it
+        found; then every whole frame is FFT'd, its metric filed as frame k_first + i, and
+        the tracker (when enabled) is updated with the expected tone from the frame map and
+        its correction applied to the following frames. Returns a WindowResult."""
         p = self.p
         fs = p.modem_rate if fs is None else fs
         if doppler_hz is not None:

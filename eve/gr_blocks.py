@@ -70,6 +70,9 @@ class ScheduleFrameMap(FrameMap):
         return k
 
     def tones_at_time(self, t: np.ndarray) -> np.ndarray:
+        """Tone index (0..M-1, the pilot tone, or OFF) transmitted at each device time t,
+        looked up once per distinct frame through FrameMap.tone (ORI's frame-to-symbol
+        rule, design document 6.4)."""
         k = self.frame_at_time(t)
         tones = np.full(k.shape, OFF, dtype=np.int64)
         on = k != OFF
@@ -105,6 +108,9 @@ class EveToneSource(gr.sync_block):
         self.set_min_output_buffer(1 << 22)     # deep TX edge (self-test lesson 2026-08-05)
 
     def work(self, input_items, output_items):
+        """GNU Radio work: emit up to block_len samples for device times t0 + n / fs, tag
+        the very first sample with tx_time = t0 (when tag_time) and the last with tx_eob,
+        count samples_on and frames_sent, and return -1 once t_end_device is reached."""
         out = output_items[0]
         if self.done:
             return -1
@@ -165,20 +171,28 @@ class RxDecimator:
         self.f_shift_hz = f_shift_hz
 
     def connect(self, tb, src):
+        """Connect src -> stage 1 -> stage 2 in top block tb; returns stage 2, the block
+        the sink connects to."""
         tb.connect(src, self.stage1)
         tb.connect(self.stage1, self.stage2)
         return self.stage2
 
     def set_center_freq(self, f_hz: float):
+        """Re-center stage 1 on f_hz (Hz above the radio's dial frequency) at run time:
+        f_IF plus the model Doppler when this receiver removes it (design document 6.5)."""
         self.f_shift_hz = f_hz
         self.stage1.set_center_freq(f_hz)
 
 
 def make_rx_decimator(params: EveParams, radio_rate: float, f_shift_hz: float, decim: Optional[int] = None):
+    """Build the RxDecimator for a radio stream at radio_rate S/s, shifting f_shift_hz (Hz)
+    to DC and decimating by decim (default params.radio_decim, 32) to the modem rate."""
     return RxDecimator(params, radio_rate, f_shift_hz, decim)
 
 
 def _parse_rx_time(value) -> Optional[float]:
+    """Device time in seconds from an rx_time tag value (a (uint64 seconds, double
+    fraction) tuple), or None if the value is not one."""
     try:
         if pmt.is_tuple(value) and pmt.length(value) >= 2:
             return pmt.to_uint64(pmt.tuple_ref(value, 0)) + pmt.to_double(pmt.tuple_ref(value, 1))
@@ -239,6 +253,12 @@ class EveRxSink(gr.sync_block):
 
     # ---- GR thread ------------------------------------------------------------------------
     def work(self, input_items, output_items):
+        """GNU Radio work (GR thread): split the input at its rx_time tags and queue the
+        data between them for the writer thread. Each tag's time is compared with the time
+        the sample count predicts from the previous tag; a difference above
+        GAP_MIN_SECONDS is an overflow and that many zero samples are queued in its place,
+        so the archive's sample clock stays honest. Without tags (the software bench) the
+        first sample is placed at t0_if_untagged."""
         x = input_items[0]
         n = len(x)
         n0 = self.nitems_read(0)
@@ -281,6 +301,9 @@ class EveRxSink(gr.sync_block):
         return n
 
     def _enqueue(self, arr):
+        """Queue a data block for the writer thread. If the queue stays full for
+        BACKPRESSURE_WAIT_S the block is replaced by zeros of the same length and counted
+        as a gap, rather than stalling the radio."""
         n = len(arr)
         if n == 0:
             return
@@ -328,6 +351,9 @@ class EveRxSink(gr.sync_block):
         return None
 
     def _consume(self, arr: np.ndarray):
+        """Writer thread: place a block on the device-time axis starting at _t_next, write
+        the parts that fall inside a receive window to that window's file, drop the rest,
+        and advance _t_next by the block length."""
         if self._t_next is None:
             return                      # no timestamp yet: cannot place samples on the schedule
         n = len(arr)
@@ -390,10 +416,16 @@ class EveRxSink(gr.sync_block):
 
     # ---- shutdown -------------------------------------------------------------------------
     def stop(self):
+        """GNU Radio stop hook: closes the archive (files and sidecars) when the flowgraph stops."""
         self.close()
         return True
 
     def close(self) -> Dict:
+        """Stop the writer thread, flush the last partial frame to the live view, close
+        every window file and write its JSON sidecar (schema dses-eve-archive/1, design
+        document 8.2: first-sample time as device time and UTC, the receive window, the
+        first frame number and the first sample's offset into it in frames, the gap list,
+        the waveform parameters and the meta fields). Returns report(). Safe to call twice."""
         if self._closed:
             return self.report()
         self._closed = True
@@ -420,6 +452,8 @@ class EveRxSink(gr.sync_block):
         return self.report()
 
     def report(self) -> Dict:
+        """Counts for the session log: samples in and written, gap events and padded
+        samples, rx_time tags seen, the file per chunk index, and the first timestamp."""
         return {"samples_in": self.samples_in, "samples_written": self.samples_written,
                 "gap_events": self.gap_events, "gap_samples": self.gap_samples,
                 "time_tags": self.time_tags, "files": {ci: str(f["path"]) for ci, f in self._files.items()},

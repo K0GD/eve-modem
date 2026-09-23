@@ -25,6 +25,8 @@ from eve.schedule import Schedule  # noqa: E402
 
 
 def main(argv=None):
+    """Command line: decode ARCHIVE_DIR with the schedule JSON and print the per-pass and
+    combined decisions with their margins; returns 0 when the combined decode is ok, else 1."""
     ap = argparse.ArgumentParser(description="offline decode of an EVE session archive")
     ap.add_argument("archive_dir")
     ap.add_argument("--schedule", required=True, help="session schedule JSON")

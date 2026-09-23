@@ -67,6 +67,10 @@ def encode_message(text: str, params: EveParams) -> Tuple[np.ndarray, np.ndarray
 
 @dataclass
 class DecodeOutcome:
+    """Result of decoding one set of 11 symbols: the decided symbols, the 127-bit codeword
+    they unpack to, the BCH verdict (bch_ok, bits_corrected), the CRC verdict, the recovered
+    text and the 106-bit payload. crc_ok is True only when the BCH decode was trustworthy
+    as well."""
     symbols: List[int]
     codeword_rx: np.ndarray
     bch_ok: bool
@@ -77,10 +81,14 @@ class DecodeOutcome:
 
     @property
     def ok(self) -> bool:
+        """True when both the BCH decode and the CRC check passed: the message is good."""
         return self.bch_ok and self.crc_ok
 
 
 def decode_symbols(symbols: Sequence[int], params: EveParams) -> DecodeOutcome:
+    """11 decided symbols -> DecodeOutcome: unpack to the 127-bit codeword, BCH-decode (up to
+    3 bit errors) and verify the CRC over the 90 message bits, the last step of the receiver
+    reference implementation (design document 6.3)."""
     cw_rx = unpack_symbols(symbols, params)
     res = bch.decode(cw_rx)
     chk = message.verify_payload(res.message)
@@ -114,6 +122,8 @@ class FrameMap:
         self.repeat_count = repeat_count
 
     def window_of(self, k: int) -> Optional[Tuple[int, int]]:
+        """The (first, last) on-window that contains frame k, or None when the transmitter is
+        off at frame k; an always-on map (on_windows None) answers (0, int64 max)."""
         if self.on_windows is None:
             return (0, np.iinfo(np.int64).max)
         for w in self.on_windows:
@@ -122,6 +132,8 @@ class FrameMap:
         return None
 
     def is_pilot(self, k: int) -> bool:
+        """True when the pilot is enabled and frame k is one of the first pilot_frames frames
+        of its on-window (design document 6.4)."""
         if not self.pilot:
             return False
         w = self.window_of(k)
@@ -140,10 +152,14 @@ class FrameMap:
         return self.symbols[m]
 
     def tones(self, k_first: int, k_last: int) -> np.ndarray:
+        """Tone index of every frame k_first..k_last inclusive as an int64 array (OFF = -1
+        where the transmitter is silent)."""
         return np.array([self.tone(k) for k in range(k_first, k_last + 1)], dtype=np.int64)
 
     @property
     def n_frames_total(self) -> Optional[int]:
+        """Frames the map spans: the last on-window's last frame + 1; for an always-on map,
+        repeat_count x n_frames_msg when a repeat count is set, else None (unbounded)."""
         if self.on_windows is None:
             return None if self.repeat_count is None else self.repeat_count * self.p.n_frames_msg
         return self.on_windows[-1][1] + 1
@@ -179,12 +195,18 @@ class ToneSynthesizer:
 
     @property
     def t(self) -> float:
+        """Time in seconds of the next sample to be generated, n / fs (t = 0 is frame 0)."""
         return self.n / self.fs
 
     def frame_of_samples(self, n: np.ndarray) -> np.ndarray:
+        """Frame index of each absolute sample index n at this sample rate, floor(n / fs x
+        R_bw): frame k starts at sample k x fs / R_bw (section 6.4)."""
         return np.floor(n / self.fs * self.p.r_bw + 1e-9).astype(np.int64)
 
     def generate(self, n_samples: int) -> np.ndarray:
+        """The next n_samples samples of the stream (complex, the configured dtype), each
+        sample's tone looked up from the frame map by its frame index; advances the running
+        sample index and carries the phase."""
         n = np.arange(self.n, self.n + n_samples, dtype=np.float64)
         k = self.frame_of_samples(n)
         k0, k1 = int(k[0]), int(k[-1])
@@ -241,7 +263,11 @@ def ori_synthesize(symbols: Sequence[int], fs: float, t_sym: float, params: EveP
 
 # ---- receiver core (section 6.3) ------------------------------------------------------
 class FrameBank:
-    """Per-frame FFT and magnitude (or power) at the M candidate tone bins."""
+    """Per-frame FFT and magnitude (or power) at the M candidate tone bins (design document
+    6.3). A frame is n_fft samples at the modem rate and tone d sits at bin tone_bin_step x d,
+    so the bins are 2 x arange(M). combine is "magnitude" (linear combining, as in Pete
+    Wyckoff's runTest.m) or "power" (what ORI's AWGN link check assumes); window, if given,
+    multiplies every frame before the FFT."""
 
     def __init__(self, params: EveParams, combine: str = "magnitude", window: Optional[np.ndarray] = None):
         self.p = params
@@ -252,6 +278,9 @@ class FrameBank:
         self.window = window
 
     def frame_metric(self, x_frame: np.ndarray) -> np.ndarray:
+        """Metric of one frame: FFT of its n_fft samples (windowed if a window was given) and
+        |X| or |X|^2 at the M tone bins, shape (M,). Raises ValueError unless the frame is
+        exactly n_fft samples."""
         if x_frame.size != self.p.n_fft:
             raise ValueError(f"frame must be {self.p.n_fft} samples, got {x_frame.size}")
         x = x_frame if self.window is None else x_frame * self.window
@@ -269,7 +298,10 @@ class FrameBank:
 
 
 class SymbolAccumulator:
-    """Files frame metrics into (repetition, symbol) accumulators and decides."""
+    """Files frame metrics into (repetition, symbol) accumulators and decides (design
+    document 4.5, 6.3, 6.4). acc maps (r, m) to the summed metric of shape (M,) and count
+    to the number of frames in that sum; the frame map, when given, says which frames are
+    pilot or off. Repeat-and-combine is the sum over repetitions in combined()."""
 
     def __init__(self, params: EveParams, frame_map: Optional[FrameMap] = None):
         self.p = params
@@ -280,6 +312,10 @@ class SymbolAccumulator:
         self.pilot_frames: List[Tuple[int, np.ndarray]] = []
 
     def add(self, k: int, metric: np.ndarray) -> None:
+        """File the metric (shape (M,)) of frame k into the accumulator for (repetition,
+        symbol) = frame_symbol_index(k). With a frame map, a frame outside every on-window
+        is dropped and a pilot frame is kept aside in pilot_frames instead of being filed
+        (section 6.4); frames_seen counts every call."""
         self.frames_seen += 1
         if self.map is not None:
             if self.map.window_of(k) is None:
@@ -296,11 +332,13 @@ class SymbolAccumulator:
             self.count[key] = 1
 
     def add_block(self, k_first: int, metrics: np.ndarray) -> None:
+        """File consecutive frames: row i of metrics (shape (n_frames, M)) is frame k_first + i."""
         for i in range(metrics.shape[0]):
             self.add(k_first + i, metrics[i])
 
     @property
     def repetitions(self) -> List[int]:
+        """Sorted indices of the repetitions that have received at least one frame."""
         return sorted({r for r, _ in self.acc})
 
     def combined(self, reps: Optional[Iterable[int]] = None, restrict_last: bool = False) -> np.ndarray:
@@ -323,10 +361,14 @@ class SymbolAccumulator:
         return out
 
     def decide(self, reps: Optional[Iterable[int]] = None, restrict_last: bool = False) -> List[int]:
+        """Decided tone per symbol, the argmax over the M tones of combined(reps,
+        restrict_last): a list of n_sym ints (design document 6.3)."""
         c = self.combined(reps, restrict_last)
         return [int(np.argmax(c[m])) for m in range(self.p.n_sym)]
 
     def decode(self, reps: Optional[Iterable[int]] = None, restrict_last: bool = False) -> DecodeOutcome:
+        """Decide the symbols over the chosen repetitions (all by default) and run them
+        through decode_symbols(): BCH, CRC and text in one DecodeOutcome."""
         return decode_symbols(self.decide(reps, restrict_last), self.p)
 
     def margin_db(self, reps: Optional[Iterable[int]] = None) -> np.ndarray:

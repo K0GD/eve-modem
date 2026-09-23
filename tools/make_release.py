@@ -64,6 +64,7 @@ WORKBENCH_CANDIDATES = [
 
 
 def version() -> str:
+    """The release version from the __version__ line of eve/__init__.py."""
     m = re.search(r'^__version__\s*=\s*"([^"]+)"', (ROOT / "eve" / "__init__.py").read_text(encoding="utf-8"), re.M)
     if not m:
         raise SystemExit("eve/__init__.py has no __version__")
@@ -71,6 +72,8 @@ def version() -> str:
 
 
 def find_dses_radio() -> Path:
+    """Path of the Workbench's dses_radio.py to bundle: DSES_WORKBENCH, the sibling
+    DSES_Workbench clone, or ~/dev/dses-workbench; exits with a message when none has it."""
     for c in WORKBENCH_CANDIDATES:
         if c and (c / "dses_radio.py").is_file():
             return c / "dses_radio.py"
@@ -78,6 +81,9 @@ def find_dses_radio() -> Path:
 
 
 def stage(dist: Path, ver: str) -> Path:
+    """Copy the ship list into dist/eve-modem-<ver>/ (files, directory globs, the documents,
+    the bundled dses_radio.py), report what is missing, normalize LF_EXTS files to LF, and
+    set the executable bits on the shell launchers. Returns the staging folder."""
     bundle = f"{SLUG}-{ver}"
     st = dist / bundle
     if st.exists():
@@ -157,6 +163,9 @@ def check_staged_imports(st: Path) -> None:
 
 
 def build_zip(st: Path, dist: Path) -> Path:
+    """Zip the staging tree as dist/<name>.zip with one top folder, forward-slash names, and
+    mode 0755 on the launchers; check the entry names; write the .sha256 sidecar as bytes
+    with an LF. Returns the zip path."""
     zpath = dist / f"{st.name}.zip"
     if zpath.exists():
         zpath.unlink()
@@ -184,6 +193,8 @@ def build_zip(st: Path, dist: Path) -> Path:
 
 
 def main(argv=None) -> int:
+    """Command line: stage, check the staged imports unless --no-check, build the zip and
+    sidecar in --dist (default dist/). Returns 0."""
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--no-check", action="store_true")
     ap.add_argument("--dist", default=str(ROOT / "dist"))

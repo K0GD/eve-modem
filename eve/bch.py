@@ -43,18 +43,23 @@ assert _x == 1, "x^7+x^3+1 is not primitive?"
 
 
 def gf_mul(a: int, b: int) -> int:
+    """Product of two GF(2^7) elements (integers 0..127 in the polynomial basis) through
+    the log/antilog tables."""
     if a == 0 or b == 0:
         return 0
     return int(_EXP[_LOG[a] + _LOG[b]])
 
 
 def gf_inv(a: int) -> int:
+    """Multiplicative inverse of a nonzero GF(2^7) element; raises ZeroDivisionError for 0."""
     if a == 0:
         raise ZeroDivisionError("GF inverse of 0")
     return int(_EXP[(N - _LOG[a]) % N])
 
 
 def gf_pow_alpha(e: int) -> int:
+    """alpha^e in GF(2^7), alpha the primitive element (a root of x^7 + x^3 + 1); the
+    exponent is reduced mod 127, so negative exponents are allowed."""
     return int(_EXP[e % N])
 
 
@@ -93,6 +98,11 @@ def _minimal_poly(alpha_exp: int) -> int:
 
 
 def generator_poly() -> int:
+    """Generator polynomial g(x) of the narrow-sense t = 3 code as an int (bit i = the
+    coefficient of x^i): the product of the minimal polynomials of alpha, alpha^3 and
+    alpha^5. Checked at import time against the Lin & Costello value 0o11554743, the
+    default of MATLAB's bchenc and of galois, which the ORI reference generator (Michelle
+    Thompson) uses."""
     g = 1
     for e in (1, 3, 5):
         g = _poly_mul_gf2(g, _minimal_poly(e))
@@ -128,6 +138,10 @@ def encode(message_bits) -> np.ndarray:
 # ---- decoder ----------------------------------------------------------------------
 @dataclass
 class DecodeResult:
+    """What decode() returns: the 106 message bits, the corrected 127-bit codeword, how many
+    bits were flipped, whether the syndromes vanished after the correction (ok), and the
+    word positions that were flipped. When ok is False, message and codeword are not to be
+    trusted."""
     message: np.ndarray        # 106 bits (the first K of the corrected word)
     codeword: np.ndarray       # corrected 127-bit word
     n_corrected: int           # bits flipped
@@ -201,6 +215,12 @@ def _chien(sigma: List[int]) -> List[int]:
 
 
 def decode(word_bits) -> DecodeResult:
+    """Decode a received 127-bit word laid out as encode() produces it (index 0 the highest
+    degree, message bits first): syndromes, Berlekamp-Massey, Chien search, then the
+    syndromes are recomputed on the corrected word to confirm it. Up to t = 3 bit errors
+    are corrected. More than that gives ok = False with n_corrected 0 and no positions,
+    either because the locator has no consistent root set or because a residual syndrome
+    remains; in the latter case the returned word still carries the attempted flips."""
     r = np.asarray(word_bits, dtype=np.uint8).ravel().copy()
     if r.size != N:
         raise ValueError(f"received word must be {N} bits, got {r.size}")

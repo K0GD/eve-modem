@@ -31,6 +31,13 @@ from gnuradio import uhd  # noqa: E402  (after dses_radio, which sets UHD_IMAGES
 
 @dataclass
 class RadioConfig:
+    """Everything the session tool or the application decides about the B210 before it is
+    opened (design document 7.1). Frequencies in Hz, gains in dB. clock_source selects the
+    10 MHz reference ('external' = the GPS clock on REF IN, 'gpsdo' = a board GPSDO,
+    'internal' = the TCXO, bench only); time_source None follows the clock source, 'host'
+    means no PPS is available and the device time is set from the host's NTP clock instead
+    (4.3). key_bank / key_mask name the J504 lines the sequencer drives: GPIO_0 = TX key,
+    GPIO_1 = LNA control, both low = receive (7.2, decision D24)."""
     serial: str = ""                    # empty = first B2xx found
     f_dial_hz: float = 1299.5e6
     tx_gain_db: float = 0.0             # B210 TX gain; the session tool sets the real value
@@ -65,6 +72,11 @@ def check_ports(cfg: "RadioConfig") -> None:
 
 @dataclass
 class RadioStatus:
+    """A snapshot of the open radio as read back from UHD: reference and lock state, device
+    time (seconds on the USRP's own clock) and the last PPS edge, the time-set error against
+    the PPS or the host clock (seconds; None before the time was set), the actual sample
+    rates (S/s), the tuned frequencies (Hz), whether each LO offset was applied honestly,
+    the gains (dB) and the ports. summary() is the one line the session log carries."""
     serial: str
     ref_locked: bool
     clock_source: str
@@ -84,6 +96,7 @@ class RadioStatus:
     tx_antenna: str
 
     def summary(self) -> str:
+        """One line with every field, for the log and the session report's radio entry."""
         return (f"B210 {self.serial}: ref {self.clock_source}/{self.time_source} locked={self.ref_locked}; "
                 f"device time {self.device_time:.3f} (last PPS {self.time_last_pps:.0f}, set error "
                 f"{'n/a' if self.pps_error_s is None else f'{self.pps_error_s:+.6f} s'}); "
@@ -165,6 +178,17 @@ class EveRadio:
         return self.configure(params, cfg, set_time)
 
     def configure(self, params: EveParams, cfg: RadioConfig, set_time: bool = True) -> RadioStatus:
+        """Apply the waveform and the settings to the open blocks and return the status.
+        Order: receiver rate, gain, port and LO-offset tune; transmitter frontend, rate,
+        gain, port and tune (both directions park the LO lo_offset_hz from the dial, 7.1);
+        then the 10 MHz reference and the PPS source for the motherboard (one call covers
+        both streams), a 5 s wait for the ref_locked sensor, which the B210 reports only
+        for an external or GPSDO reference (it reads False on the internal one), and a
+        refusal to run unlocked when require_ref_lock is set and the clock is not internal.
+        With set_time the device time is set to UTC on the next PPS edge (set error checked
+        to 1 ms) or, host-timed, from time.time() through set_time_now (checked to 50 ms;
+        4.3). Finally the key_mask lines become manual GPIO outputs and the TX key is
+        released."""
         rate = params.radio_rate
         self.rx.set_samp_rate(rate)
         self.rx.set_gain(cfg.rx_gain_db)
@@ -224,6 +248,9 @@ class EveRadio:
 
     # ---- time ------------------------------------------------------------------------------
     def device_time(self) -> float:
+        """The USRP's own clock in seconds (UTC once set on a PPS edge or from the host),
+        read through the source block. The schedule and the keyer run on this clock, not
+        the host's."""
         return float(self.rx.block.get_time_now().get_real_secs())
 
     def verify_pps(self, wait_s: float = 2.5) -> bool:
@@ -256,10 +283,12 @@ class EveRadio:
 
     @property
     def keyed(self) -> bool:
+        """Last commanded state of the TX line (True = GPIO_0 high = transmit); not a readback."""
         return self._keyed
 
     def key_readback(self) -> bool:
-        return bool(R.gpio_read(self.rx.block, self.cfg.key_bank) & self.cfg.key_mask)
+        """Read the GPIO bank back and report whether the transmitter line (GPIO_0) is high."""
+        return bool(R.gpio_read(self.rx.block, self.cfg.key_bank) & 0x01)
 
     # ---- status ------------------------------------------------------------------------------
     def status_text(self) -> str:
@@ -270,6 +299,9 @@ class EveRadio:
             return f"status unavailable: {e}"
 
     def status(self) -> RadioStatus:
+        """Read the radio back (lock sensor, clock and time sources, device time, last PPS,
+        tuned frequencies, gains, ports) into a RadioStatus. The rates and the LO-offset
+        results are the values remembered from configure()."""
         b = self.rx.block
         return RadioStatus(
             serial=self.cfg.serial, ref_locked=R.ref_locked(b),

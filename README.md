@@ -124,6 +124,25 @@ Project-local conda env, like the Workbench:
 The core (`eve/`) needs only NumPy; GNU Radio and UHD are used by the two radio
 modules only.
 
+## Acknowledgments
+
+The waveform is the Open Research Institute's. Pete Wyckoff, KA3WCA, designed Spiral #2
+and sized the link; Michelle Thompson wrote ORI's Python implementation, which this modem
+reproduces bit for bit and treats as the air-interface specification, and maintained the
+link-budget notebook we run unchanged. ORI published all of it under the GPL and answered
+every question. We could not have done this without them. The station hardware this
+software drives was built and measured by the DSES EVE team. The design document's
+Acknowledgments section says more.
+
+## For reviewers
+
+Start with `docs/DSES_EVE_Modem_Design_and_ICD.pdf`: sections 4 and 6 are the waveform and
+timing as implemented, section 5 the software design with the receiver algorithms (5.5),
+the process architecture and fault handling (5.6) and the test map (5.7), section 10 the
+decision register with the reasoning behind every choice. Every module and public function
+in `eve/` carries a docstring that names the design section it implements. The tests in
+`tests/` are the executable validation plan.
+
 ## References
 
 - ORI EVE repository: https://github.com/OpenResearchInstitute/EVE

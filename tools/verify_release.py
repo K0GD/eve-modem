@@ -26,6 +26,9 @@ DEFAULT = "https://gpstime.com/sw_distribution/eve-modem/manifest.json"
 
 
 def main(argv=None) -> int:
+    """Fetch the manifest, download and verify the zip through eve.updater, extract it, and
+    check the top folder name, the version inside, and the bundled files. Returns 0 PASS, 1
+    FAIL, 2 manifest incomplete."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", default=DEFAULT)
     a = ap.parse_args(argv)

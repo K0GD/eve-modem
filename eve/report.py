@@ -26,6 +26,8 @@ PAGE = (8.5, 11.0)
 
 
 def _page(title: str, subtitle: str) -> Figure:
+    """A new letter-size Figure with the report banner: series line, `title`, `subtitle`, a
+    teal rule, and the version and generation time in the footer."""
     fig = Figure(figsize=PAGE, dpi=100)
     fig.text(0.06, 0.965, "DSES Earth-Venus-Earth modem — session report", fontsize=9, color=GREY)
     fig.text(0.06, 0.935, title, fontsize=15, fontweight="bold", color=NAVY)
@@ -36,6 +38,8 @@ def _page(title: str, subtitle: str) -> Figure:
 
 
 def _mono(fig: Figure, x: float, y: float, lines: List[str], size: float = 8.0, dy: float = 0.0148) -> float:
+    """Write `lines` in monospace from (x, y) downward (figure fractions), `dy` per line;
+    returns the y below the last line."""
     for ln in lines:
         fig.text(x, y, ln, fontsize=size, family="monospace", va="top")
         y -= dy
@@ -43,6 +47,8 @@ def _mono(fig: Figure, x: float, y: float, lines: List[str], size: float = 8.0, 
 
 
 def _fmt_rx(rx: Dict) -> List[str]:
+    """One line summarizing the session's receive statistics dict (samples, windows filed,
+    gaps)."""
     if not rx:
         return ["(no receive summary)"]
     n_files = len(rx.get("files", {}) or {})
@@ -54,7 +60,11 @@ def write_report(sched: Schedule, rep: Dict, summary: Optional[Dict], windows: L
                  extra: Optional[Dict[str, str]] = None) -> Path:
     """rep: the session JSON as a dict (SessionReport fields + schedule + options).
     summary: eve.decode.summarize() output, or None if the offline decode did not run.
-    windows: eve.decode.decode_archive() per-window results (may be empty)."""
+    windows: eve.decode.decode_archive() per-window results (may be empty).
+    Writes `out_pdf` (folders created) and returns its Path. Page 1: the verdict, the
+    session lines, the extra and radio lines, the options, and the per-symbol decisions
+    table; page 2: the margin per symbol, the chunk timeline with key events, and the
+    per-window synchronization; then the window lines and key events, 52 per page."""
     out_pdf = Path(out_pdf)
     out_pdf.parent.mkdir(parents=True, exist_ok=True)
     p = sched.params

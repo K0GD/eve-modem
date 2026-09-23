@@ -33,12 +33,21 @@ from .schedule import Schedule
 from .doppler import DopplerModel, iso_utc
 from . import gr_blocks, modem, sync
 
+WATCHDOG_MARGIN_S = 2.0          # the keyer watchdog releases the transmitter this long after a chunk's end at the latest
 PA_T_ON_MAX_S = 300.0       # 7.2: enforced regardless of the schedule when an amplifier is in the chain
 PA_T_OFF_MIN_S = 240.0
 
 
 @dataclass
 class SessionOptions:
+    """How a session runs, as opposed to what it transmits (that is the Schedule). Times in
+    seconds: t_lead_s / t_lag_s are the key-line lead before the first RF sample and the lag
+    after the last (design document 7.2: 200 / 100 ms); start_margin_s / end_margin_s pad
+    the flowgraph around the schedule; arm_lead_s starts the flowgraph early so the timed
+    USRP streams are armed (D22). pa_in_chain enforces the 7.2 duty limits whatever the
+    schedule says; tx_precompensate / rx_doppler_removal choose which end applies the
+    Doppler model (6.5); tx_enabled False is the receive-only interop mode (no RF, no
+    keying); realtime_mode asks the Workbench's RealtimeMode helper for the run."""
     out_dir: str = "archive"
     t_lead_s: float = 0.2
     t_lag_s: float = 0.1
@@ -71,15 +80,19 @@ class SimRadio:
         self.sim = True
 
     def open(self):
+        """No hardware to open; returns self so callers can treat it like EveRadio.open()."""
         return self
 
     def close(self):
+        """Nothing to release."""
         pass
 
     def device_time(self) -> float:
+        """The wall clock (time.time(), Unix seconds) stands in for the USRP clock."""
         return time.time()
 
     def key(self, on: bool) -> None:
+        """Record the TX key line as (host time, state) in key_log instead of driving a pin."""
         self._keyed = bool(on)
         self.key_log.append((time.time(), bool(on)))
 
@@ -92,6 +105,7 @@ class SimRadio:
 
     @property
     def keyed(self):
+        """Last commanded TX state."""
         return self._keyed
 
     def build_channel(self, tb: gr.top_block, tone_source, rtt_s: float = 0.0):
@@ -123,11 +137,16 @@ class SimRadio:
         return src
 
     def status_text(self) -> str:
+        """One-line description for the session log's radio entry."""
         return f"SimRadio: rate {self.rate:.2f} S/s, C/N0 {self.cn0_db} dB-Hz"
 
 
 @dataclass
 class SessionReport:
+    """What a run produced, written to <session_id>_session.json (design document 8.4):
+    start and finish UTC, the radio's one-line status, chunks keyed and the key events
+    (device time, state, chunk index or reason), transmitted samples and frames, the
+    receive sink's report (samples, gaps, files), the live decode, and the abort state."""
     session_id: str
     started_utc: str = ""
     finished_utc: str = ""
@@ -144,6 +163,13 @@ class SessionReport:
 
 
 class Session:
+    """One session on one radio: preflight the schedule against the interlocks, build the
+    flowgraph, arm it before t0, run the keyer thread through the chunk table, drain, and
+    write the session log (design document 5.1, 7.2, 8.4). `radio` is an EveRadio or a
+    SimRadio; `model` the DopplerModel behind the schedule (None only in simulation);
+    `keyer` a Keyer (default: the radio's own GPIO_0 through GpioKeyer). Callables
+    appended to `listeners` receive (frame k, samples, metric) for every received frame,
+    called from the sink's worker thread; `phase` is a short text for the operator display."""
     def __init__(self, schedule: Schedule, model: Optional[DopplerModel], radio, opts: Optional[SessionOptions] = None,
                  log: Callable[[str], None] = None, keyer=None):
         self.sched = schedule
@@ -167,6 +193,12 @@ class Session:
 
     # ---- interlocks (7.2) ------------------------------------------------------------------
     def preflight(self) -> List[str]:
+        """Check the schedule against the station interlocks and return the problems found
+        (empty = go). Schedule self-consistency (Schedule.validate); with pa_in_chain the
+        7.2 hard limits (T_on <= 300 s, T_off >= 240 s) regardless of the schedule's own
+        limits; enough silence between chunks for the sequencer (T_lead + T_lag + the
+        keyer's settle_s and release_s, see keyer.sequencer_gap_s); an ephemeris model
+        wherever Doppler is applied."""
         problems = []
         s = self.sched
         try:
@@ -197,6 +229,9 @@ class Session:
         return problems
 
     def abort(self, reason: str) -> None:
+        """Stop the run from any thread: record the reason, set the abort flag the keyer and
+        run loops watch, and release the key line first (a Sequencer drops the transmitter
+        before it restores the LNA). A second call does nothing."""
         if not self._abort.is_set():
             self.report.aborted = True
             self.report.abort_reason = reason
@@ -209,6 +244,10 @@ class Session:
 
     # ---- keyer ---------------------------------------------------------------------------------
     def _keyer(self) -> None:
+        """Keyer thread: for each chunk, key up at tx_start - T_lead - settle (the
+        sequencer's LNA guard, so the RF still starts T_lead after the transmitter is
+        keyed) and down at tx_stop + T_lag, on device time; log the key events and any
+        key-line fault. Receive-only sessions never key."""
         if not self.opts.tx_enabled:
             self.phase = "receive only (partner transmits)"
             return
@@ -224,22 +263,39 @@ class Session:
             self.phase = f"TX chunk {c.index + 1} of {len(self.sched.chunks)}"
             self.report.key_events.append({"t": self.radio.device_time(), "on": True, "chunk": c.index})
             self.report.chunks_keyed += 1
-            limit = t_off + (PA_T_ON_MAX_S if self.opts.pa_in_chain else 3600.0)
-            ok = self._sleep_until(t_off, watchdog=limit)
+            # Watchdog: whatever happens to this thread (a stalled host, a serial write that
+            # blocks), the transmitter is released no later than t_off + WATCHDOG_MARGIN_S.
+            # The earlier "watchdog" argument to _sleep_until could never fire (design 7.2
+            # promised one; found in the 2026-09-23 review).
+            wd = threading.Timer(max(0.1, t_off - self.radio.device_time() + WATCHDOG_MARGIN_S), self._watchdog_release, args=(c.index,))
+            wd.daemon = True
+            wd.start()
+            ok = self._sleep_until(t_off)
             self.keyer.key(False)
+            wd.cancel()
             self.phase = f"listening for chunk {c.index + 1} of {len(self.sched.chunks)}"
             self.report.key_events.append({"t": self.radio.device_time(), "on": False, "chunk": c.index})
             if not ok:
                 return
 
-    def _sleep_until(self, t_device: float, watchdog: Optional[float] = None) -> bool:
+    def _watchdog_release(self, chunk_index: int) -> None:
+        """Timer callback: the keyer thread has not released chunk `chunk_index` in time.
+        Release the transmitter (the sequencer does TX first, then the LNA) and abort."""
+        if self.keyer.keyed:
+            self.log(f"KEYER WATCHDOG: chunk {chunk_index + 1} still keyed {WATCHDOG_MARGIN_S:.0f} s past its end; releasing")
+            try:
+                self.keyer.key(False)
+            except Exception:
+                pass
+            self.abort(f"keyer watchdog: chunk {chunk_index + 1} overran")
+
+    def _sleep_until(self, t_device: float) -> bool:
+        """Sleep on the radio's device clock until t_device (seconds); True when reached,
+        False on abort."""
         while not self._abort.is_set():
             now = self.radio.device_time()
             if now >= t_device:
                 return True
-            if watchdog is not None and now > watchdog:
-                self.abort("keyer watchdog: chunk overran the PA limit")
-                return False
             time.sleep(min(0.05, max(0.001, t_device - now)))
         return False
 
@@ -263,6 +319,14 @@ class Session:
         return fD
 
     def build(self, t0: float) -> gr.top_block:
+        """Assemble the flowgraph for a stream starting at device time t0 (seconds): the
+        EveToneSource (comb at f_IF, Doppler pre-compensated from the model when
+        tx_precompensate, tx_time-tagged on hardware) into the usrp_sink, and the
+        usrp_source through the two-stage decimator (shifting f_IF to DC, 5.3) into the
+        EveRxSink, whose per-frame callback runs the frame FFT bank, files the live
+        accumulator and calls the listeners. Simulation routes the tone source through
+        SimRadio.build_channel instead; receive-only sends the tones into a null sink (to
+        keep the frame clock) and starts the receive stream at t0."""
         opts, s, p = self.opts, self.sched, self.p
         tb = gr.top_block(f"eve_session_{s.session_id}")
         fD = self._doppler_fn()
@@ -318,6 +382,13 @@ class Session:
 
     # ---- run -----------------------------------------------------------------------------------
     def run(self) -> SessionReport:
+        """Run the session to its end and return the report. Refuses a failing preflight or
+        a schedule whose start is already past on the device clock. Starts the flowgraph
+        arm_lead_s before t0 (= t_start - start_margin_s), enters real-time mode when the
+        helper exists, keys through the chunk table on the keyer thread, waits for the tone
+        source to finish and the last receive window plus end_margin_s to pass, drains the
+        sink, then stops. Ctrl-C aborts; abort or a fault still releases the key, closes
+        the archive and writes the log (_finish)."""
         probs = self.preflight()
         if probs:
             raise ValueError("preflight failed:\n  " + "\n  ".join(probs))
@@ -435,6 +506,8 @@ class Session:
         gc.collect()
 
     def write_log(self) -> Path:
+        """Write <out_dir>/<session_id>_session.json: the report plus the schedule, the
+        options and the software version (8.4). Returns the path."""
         path = Path(self.opts.out_dir) / f"{self.sched.session_id}_session.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         d = asdict(self.report)

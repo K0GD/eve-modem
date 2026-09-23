@@ -24,6 +24,8 @@ _CANDIDATES = (
 
 
 def workbench_dir() -> Optional[Path]:
+    """The directory holding dses_radio.py: the DSES_WORKBENCH variable first, then the
+    candidate clones and production installs in order; None if none has the file."""
     env = os.environ.get("DSES_WORKBENCH")
     cands = ([Path(env)] if env else []) + list(_CANDIDATES)
     for c in cands:

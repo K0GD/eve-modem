@@ -21,7 +21,15 @@ from .schedule import Schedule
 def decode_archive(archive_dir, schedule: Schedule, use_pilot: bool = True, track: bool = True,
                    verbose: bool = True, max_windows: Optional[int] = None,
                    log=None, epoch_search_frames: int = 0) -> Tuple[modem.SymbolAccumulator, List[Dict]]:
-    """epoch_search_frames > 0: the transmitter is a partner whose start may differ from
+    """Decode every archived receive window of the schedule's session found in archive_dir
+    (design document 5.3, 8.2): the decision of record. Each <session_id>_<NN>.eve.iq
+    (complex64 at the modem rate, baseband) is aligned to the frame grid from its .json
+    sidecar (first frame number and the first sample's offset into it, in frames; a window
+    a few samples short of whole frames is zero-padded), run through sync.WindowReceiver
+    with use_pilot / track, and filed into one SymbolAccumulator. log (a callable taking one
+    string) or verbose chooses where the per-window lines go; max_windows limits the files.
+
+    epoch_search_frames > 0: the transmitter is a partner whose start may differ from
     our nominal epoch by up to that many frames (interop tests). With a pilot the detector
     searches that range in every window; without one the known message symbols are
     matched over the range on the first window and the shift is applied to all.

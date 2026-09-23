@@ -43,16 +43,21 @@ TimeLike = Union[float, int, str, datetime]
 
 @dataclass(frozen=True)
 class Site:
+    """An observing site: geodetic latitude and longitude in degrees (east positive) and
+    height in meters. Serialized as the schedule file's transmitter / receiver entries
+    (design document 8.1)."""
     name: str
     lat_deg: float
     lon_deg: float           # east positive
     alt_m: float
 
     def to_dict(self):
+        """The schedule-file form: site, lat, lon, alt_m."""
         return {"site": self.name, "lat": self.lat_deg, "lon": self.lon_deg, "alt_m": self.alt_m}
 
     @classmethod
     def from_dict(cls, d) -> "Site":
+        """From the schedule-file form ('name' accepted for 'site'; alt_m defaults to 0)."""
         return cls(d.get("site", d.get("name", "")), float(d["lat"]), float(d["lon"]), float(d.get("alt_m", 0.0)))
 
 
@@ -61,6 +66,8 @@ DSES_HASWELL = Site("DSES Haswell", 38.380833, -103.156111, 1311.0)
 
 # ---- time helpers ---------------------------------------------------------------------
 def to_unix(t: TimeLike) -> float:
+    """Any accepted time (float or int Unix seconds, datetime, ISO-8601 text, astropy
+    Time) to float Unix seconds; naive datetimes and text without a zone are taken as UTC."""
     if isinstance(t, (float, int, np.floating, np.integer)):
         return float(t)
     if isinstance(t, datetime):
@@ -81,10 +88,13 @@ def to_unix(t: TimeLike) -> float:
 
 
 def to_datetime(t: TimeLike) -> datetime:
+    """Any accepted time to a timezone-aware UTC datetime."""
     return datetime.fromtimestamp(to_unix(t), tz=timezone.utc)
 
 
 def iso_utc(t: TimeLike, digits: int = 3) -> str:
+    """ISO-8601 UTC text 'YYYY-MM-DDTHH:MM:SS[.fff]Z' with `digits` fractional digits
+    (0 = whole seconds); the form used throughout the schedule, sidecars and logs."""
     dt = to_datetime(t)
     s = dt.strftime("%Y-%m-%dT%H:%M:%S")
     if digits:
@@ -95,6 +105,10 @@ def iso_utc(t: TimeLike, digits: int = 3) -> str:
 # ---- the table ----------------------------------------------------------------------------
 @dataclass
 class EphemerisTable:
+    """A uniformly stepped topocentric ephemeris of one target from one site: Unix
+    seconds, range in km, range rate in km/s (positive = receding), azimuth and elevation
+    in degrees, and the source it came from. The *_at() accessors interpolate linearly and
+    refuse times more than one step outside the table."""
     target: str
     site: Site
     t_unix: np.ndarray            # seconds, increasing, uniform step
@@ -106,14 +120,17 @@ class EphemerisTable:
 
     @property
     def step_s(self) -> float:
+        """Row spacing in seconds (0 for a single row)."""
         return float(self.t_unix[1] - self.t_unix[0]) if self.t_unix.size > 1 else 0.0
 
     @property
     def t_start(self) -> float:
+        """First row time, Unix seconds."""
         return float(self.t_unix[0])
 
     @property
     def t_stop(self) -> float:
+        """Last row time, Unix seconds."""
         return float(self.t_unix[-1])
 
     def _interp(self, col: np.ndarray, t: np.ndarray) -> np.ndarray:
@@ -122,21 +139,28 @@ class EphemerisTable:
         return np.interp(t, self.t_unix, col)
 
     def range_at(self, t) -> np.ndarray:
+        """Range in km at Unix times t (scalar or array), interpolated; always an array."""
         return self._interp(self.range_km, np.atleast_1d(np.asarray(t, dtype=float)))
 
     def rate_at(self, t) -> np.ndarray:
+        """Range rate in km/s at Unix times t, interpolated; always an array."""
         return self._interp(self.range_rate_km_s, np.atleast_1d(np.asarray(t, dtype=float)))
 
     def el_at(self, t) -> np.ndarray:
+        """Elevation in degrees at Unix times t, interpolated; always an array."""
         return self._interp(self.el_deg, np.atleast_1d(np.asarray(t, dtype=float)))
 
     def az_at(self, t) -> np.ndarray:
+        """Azimuth in degrees at Unix times t, interpolated; always an array."""
         return self._interp(self.az_deg, np.atleast_1d(np.asarray(t, dtype=float)))
 
     # ---- CSV --------------------------------------------------------------------------
     HEADER = ["utc", "range_km", "range_rate_km_s", "az_deg", "el_deg"]
 
     def save(self, path: Union[str, Path]) -> Path:
+        """Write the table as CSV: a '# {json}' header line carrying target, site and
+        source, then utc, range_km, range_rate_km_s, az_deg, el_deg rows. This is the file
+        the schedule's doppler.table entry names (8.1). Returns the path."""
         path = Path(path)
         with open(path, "w", newline="", encoding="utf-8") as f:
             f.write("# " + json.dumps({"target": self.target, "site": self.site.name,
@@ -151,6 +175,8 @@ class EphemerisTable:
 
     @classmethod
     def load(cls, path: Union[str, Path]) -> "EphemerisTable":
+        """Read a table written by save(); a CSV without the '#' header line loads with an
+        empty site and source 'csv'."""
         path = Path(path)
         with open(path, encoding="utf-8") as f:
             first = f.readline()
@@ -193,6 +219,10 @@ def fetch_horizons(target: str, site: Site, t_start: TimeLike, t_stop: TimeLike,
 
 
 def parse_horizons(txt: str, target: str, site: Site) -> EphemerisTable:
+    """Parse a Horizons text response: the CSV rows between $$SOE and $$EOE (date,
+    presence flag, blank, azimuth, elevation, delta, deldot) into a table. delta is taken
+    as km, or as AU when the number is small enough to be one (the server ignored
+    RANGE_UNITS); deldot is km/s. ValueError when the block or its rows are missing."""
     i, j = txt.find("$$SOE"), txt.find("$$EOE")
     if i < 0 or j < 0:
         raise ValueError("Horizons response has no $$SOE/$$EOE block:\n" + txt[:2000])
@@ -270,6 +300,7 @@ class DopplerModel:
 
     @property
     def monostatic(self) -> bool:
+        """True when one table serves both legs (the receiver is the transmitter's site)."""
         return self.rx is self.tx
 
     def rtt_s(self, t_tx: TimeLike) -> float:
@@ -294,17 +325,22 @@ class DopplerModel:
         return -f_rf_hz * (r_up + r_dn) / C_KM_S
 
     def doppler_series(self, t_tx: np.ndarray, f_rf_hz: float) -> np.ndarray:
+        """doppler_hz() for each transmit time in t_tx (Unix seconds), as an array of Hz."""
         return np.array([self.doppler_hz(t, f_rf_hz) for t in np.atleast_1d(t_tx)])
 
     def rate_hz_s(self, t_tx: TimeLike, f_rf_hz: float, dt: float = 30.0) -> float:
+        """Doppler rate in Hz/s at transmit time t_tx, by central difference of doppler_hz
+        over +/- dt seconds (design document 4.4: peaks near -0.48 Hz/s at 2304 MHz)."""
         t = to_unix(t_tx)
         return (self.doppler_hz(t + dt, f_rf_hz) - self.doppler_hz(t - dt, f_rf_hz)) / (2 * dt)
 
     def elevation_deg(self, t: TimeLike, which: str = "tx") -> float:
+        """Target elevation in degrees at time t from the 'tx' (default) or 'rx' site table."""
         tab = self.tx if which == "tx" else self.rx
         return float(tab.el_at(to_unix(t))[0])
 
     def azimuth_deg(self, t: TimeLike, which: str = "tx") -> float:
+        """Target azimuth in degrees at time t from the 'tx' (default) or 'rx' site table."""
         tab = self.tx if which == "tx" else self.rx
         return float(tab.az_at(to_unix(t))[0])
 
@@ -326,6 +362,8 @@ class DopplerModel:
         return out
 
     def summary(self, t: TimeLike, f_rf_hz: float) -> str:
+        """One line: target, time, round trip, Doppler and its rate at f_rf_hz, and the
+        transmit site's elevation."""
         return (f"{self.tx.target} at {iso_utc(t, 0)}: rtt {self.rtt_s(t):.2f} s, "
                 f"doppler {self.doppler_hz(t, f_rf_hz):+.1f} Hz, rate {self.rate_hz_s(t, f_rf_hz):+.3f} Hz/s, "
                 f"el {self.elevation_deg(t):.1f} deg")
