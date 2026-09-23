@@ -40,10 +40,10 @@ the program.
 |---|---|
 | B210 | On a USB 3 port of the PC (a direct rear port, not the powered extension cable). It appears in Device Manager under "USRPs". After a power event that leaves it unrecognized, unplug USB and the DC barrel for 15 s (a true cold start). |
 | GPS reference clock (Leo Bodnar) | OUT1 to the B210 **REF IN** (10 MHz). OUT2 to the B210 **PPS IN** (with output 2 disabled the OUT2 connector carries the 1 PPS; the program sets this). USB to the PC. GPS antenna with a clear sky view. Both LEDs steady after a few minutes = locked. |
-| Key line | Either the USB relay board (Setup → Keying → USB relay board: its COM/NO contact across the sequencer's key input; COM port chosen in Setup; details in `docs/hardware/usb_relay_keyer.md`) or the B210 header J504, **pin 1 (GPIO_0)** and a **ground pin (9 or 10)**, 3.3 V logic, through the isolated driver to the sequencer. On the DSES clone the front-panel IO connector is a white 2x5 shrouded header (2.54 mm pitch, mates with a standard 10-pin IDC ribbon socket or 2.54 mm Dupont leads) whose legend gives the GPIO numbers: top row G 6 4 2 0, bottom row G 7 5 3 1. The key line is the pin marked **0** (GPIO_0) with either **G**. Never straight to the sequencer input. |
+| Switching (TX key and LNA) | The modem is the sequencer: two signals, each on two outputs in parallel. **USB relay board** (DIUSTOU DSTUR-T20, `docs/hardware/diustou_dstur_t20.md`): relay 1 COM/NO = TX key (closed = transmit), relay 2 COM/NO = LNA control (closed = LNA off). **B210 J504** through an external circuit: **GPIO_0** = TX key (high = transmit), **GPIO_1** = LNA (high = LNA off), ground on pin 9 or 10, 3.3 V logic. Both released / low = receive, so an unplugged board or a dead PC leaves the feed receiving. GPIO_0 alone can drive an external sequencer (DB6NT style); GPIO_1 is then ignored. On the DSES clone the front-panel IO connector is a white 2x5 shrouded header (2.54 mm pitch, 10-pin IDC ribbon socket or Dupont leads) whose legend gives the GPIO numbers: top row G 6 4 2 0, bottom row G 7 5 3 1. Never straight to a sequencer input without the isolating circuit. |
 | Transmit | B210 **TX/RX A** to the driver's input pad. The B210 gives at most +8 dBm; the driver decides the TX gain setting (Setup → TX gain). |
 | Receive | LNA output (through the bandpass filter if fitted) to B210 **RX2 A**. Nothing on RX2 for the loopback bench. |
-| Sequencer | LNA sequencer and LNA DC control in place; the amplifier's own interlocks armed; the 2 kW load only for the thermal test. |
+| Sequencer | None in the station: the modem sequences the LNA and the transmitter itself (LNA off, guard, TX on; TX off, release, LNA on; abort takes the same way out, transmitter first). The amplifier's own interlocks stay armed; the 2 kW load only for the thermal test. |
 | PC clock | The PC needs internet NTP (the second number of the PPS-edge time set comes from it). Windows: Settings → Time → Sync now. |
 | Pointing | The dish tracks the target under System 1 (RA/Dec, J2000). The Run tab shows the target's azimuth and elevation from the ephemeris for a cross-check. |
 | Archive folder | A folder with room for the run: about 24 MB per 30-minute pass at the modem rate. |
@@ -145,12 +145,17 @@ and says so in the teal line under the run modes.
   station setting and waits for lock before opening the radio. With the HP5065A rubidium
   (plus a PPS source) back in service, untick it; the B210's own lock check still runs.
 - **Archive folder**: where the run's files go.
-- **Keying**: what closes the sequencer line while we transmit: none (bench, simulation,
-  receive only), the B210 GPIO pin, or the USB relay board on a COM port (CH340 boards
-  are listed first; Refresh after plugging one in). **Test key** clicks the relay once
-  without touching the radio. A wrong port stops a run before any RF. Choosing none for
-  an EME or Venus run is allowed but the teal line warns, since only the bare-B210 EME
-  test keys nothing.
+- **Keying**: the modem is the station's sequencer (design 7.2, D24). *none* switches
+  nothing (bench, simulation, receive only). Otherwise two signals go out on two outputs
+  in parallel: **TX key** (relay 1 of the USB board and B210 GPIO_0; energized or high =
+  transmit) and **LNA** (relay 2 and GPIO_1; energized or high = LNA off). Both released
+  is receive. The USB board's port is *auto*: the program finds the board wherever it is
+  today. If no board answers, the run goes ahead on the GPIO lines and tells you so in a
+  box, the status bar, and the log. **Test TX** and **Test LNA** click the relays for a
+  second without touching the radio. The two guard times are the gaps between switching
+  the LNA off and keying the transmitter, and between unkeying and switching the LNA back
+  on; the RF starts 200 ms after the key as before. Choosing none for an EME or Venus run
+  is allowed but the teal line warns.
 
 ## 4.4 Mode settings
 
@@ -186,7 +191,7 @@ writes the log. Use it for any fault. The same button is on the Run tab.
 | Current symbol | The sum over the frames of the symbol in progress. The yellow dashed line is the tone we sent; the solid red line with a dot on its peak is the leader. On the bench they coincide from the first frame; on Venus the peak climbs out of the noise as frames add up. |
 | Running decisions | One row per symbol: expected, decided, margin in dB, frames summed. Green rows agree with what we sent. The line under the table shows the message the live accumulators would decode now. |
 | Schedule | Chunk in progress, chunks complete, time remaining, frames wanted vs received. |
-| Key lamp | Red while the key line is asserted; the keyer's name and any fault (a relay board that stopped answering) appear in the radio panel. It rises 200 ms before the RF and drops 100 ms after. |
+| Key lamp | Red while the transmitter is keyed; the line beside it reads TX and LNA state and names the outputs in use (the USB relay board, the B210 GPIO lines, or both), with any fault (a board that stopped answering). The transmitter is keyed 200 ms before the RF and released 100 ms after; the LNA switches off a guard time before that and back on a release time after. |
 | Radio and ephemeris | LOCKED must be shown on the air. LO offset ok in both directions. GPS clock: sat LOCK, PLL LOCK. Target azimuth, elevation, round trip, Doppler, and rate. |
 | Log | Every step the program took, keying events, radio messages, decode results. |
 

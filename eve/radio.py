@@ -45,7 +45,7 @@ class RadioConfig:
     rx_antenna: str = "A : RX2"         # receiver frontend and port (Workbench naming): "A : RX2",
                                         # "B : RX2", or the TX/RX port of the frontend the TX does not use
     key_bank: str = "FP0"
-    key_mask: int = 0x01
+    key_mask: int = 0x03                # GPIO_0 = TX key (high = transmit), GPIO_1 = LNA (high = off)
     rx_stream_args: str = "recv_frame_size=8192,num_recv_frames=1024"
 
 
@@ -243,8 +243,16 @@ class EveRadio:
 
     # ---- keying ------------------------------------------------------------------------------
     def key(self, on: bool) -> None:
-        R.gpio_write(self.rx.block, 1 if on else 0, self.cfg.key_bank, self.cfg.key_mask)
+        """TX line alone (GPIO_0); the LNA line is left as it is."""
+        R.gpio_write(self.rx.block, 1 if on else 0, self.cfg.key_bank, 0x01)
         self._keyed = bool(on)
+
+    def set_lines(self, tx: bool, lna_active: bool) -> None:
+        """Both station lines at once: GPIO_0 high = transmit, GPIO_1 high = LNA off (so
+        both low = receive, the state the lines rest in when nothing drives them)."""
+        value = (1 if tx else 0) | (0 if lna_active else 2)
+        R.gpio_write(self.rx.block, value, self.cfg.key_bank, self.cfg.key_mask)
+        self._keyed = bool(tx)
 
     @property
     def keyed(self) -> bool:

@@ -83,6 +83,74 @@ def test_usb_relay_keyer_reports_faults_instead_of_raising():
     assert "fault" in k.status_text()
 
 
+class FakeRadio2:
+    """A radio with the two-line interface; records every write."""
+    def __init__(self):
+        self.calls = []
+
+    def set_lines(self, tx, lna_active):
+        self.calls.append((bool(tx), bool(lna_active)))
+
+
+def test_sequencer_orders_the_two_outputs():
+    fakes = {}
+
+    def factory(port):
+        fakes[port] = FakeSerial(port)
+        return fakes[port]
+    r = FakeRadio2()
+    k = K.make_keyer("sequencer", radio=r, port="auto", serial_factory=factory, ports=["COM77"],
+                     lna_guard_s=0.01, lna_release_s=0.01)
+    assert isinstance(k, K.Sequencer) and not k.usb_missing and len(k.outputs) == 2
+    logs = []
+    k.log = logs.append
+    k.open()
+    f = fakes["COM77"]
+    assert f.states == {1: False, 2: False} and r.calls[-1] == (False, True)     # receive state
+    assert "CH1:OFF" in logs[0]
+    f.written = b""
+    r.calls.clear()
+    k.key(True)
+    # LNA relay (2) energized before the TX relay (1); GPIO likewise (lna off first, then tx)
+    frames = [f.written[i:i + 4] for i in range(0, len(f.written), 4) if f.written[i] == 0xA0 and f.written[i + 2] != 2]
+    assert frames[0] == bytes.fromhex("A00201A3") and frames[-1] == bytes.fromhex("A00101A2")
+    assert r.calls[0] == (False, False) and r.calls[-1] == (True, False)
+    assert k.keyed and not k.lna_active and "TX KEYED" in k.status_text() and "LNA OFF" in k.status_text()
+    f.written = b""
+    r.calls.clear()
+    k.key(False)
+    frames = [f.written[i:i + 4] for i in range(0, len(f.written), 4) if f.written[i] == 0xA0 and f.written[i + 2] != 2]
+    assert frames[0] == bytes.fromhex("A00100A1") and frames[-1] == bytes.fromhex("A00200A2")
+    assert r.calls[0] == (False, False) and r.calls[-1] == (False, True)
+    assert not k.keyed and k.lna_active and f.states == {1: False, 2: False}
+    assert abs(k.settle_s - (0.01 + 2 * K.UsbRelayBoard.ACK_WAIT_S)) < 1e-9
+    k.close()
+    assert f.closed
+
+
+def test_sequencer_without_the_usb_board_falls_back_to_gpio():
+    r = FakeRadio2()
+    k = K.make_keyer("sequencer", radio=r, port="auto", serial_factory=lambda p: (_ for _ in ()).throw(OSError("no port")), ports=[])
+    assert k.usb_missing and len(k.outputs) == 1 and "NOT FOUND" in k.name
+    k.open()
+    k.key(True)
+    assert r.calls[-1] == (True, False)
+    k.key(False)
+    assert r.calls[-1] == (False, True)
+
+
+def test_find_relay_board_picks_the_port_that_answers():
+    class Mute(FakeSerial):
+        def read(self, n):
+            return b""
+
+    def factory(port):
+        return Mute(port) if port == "COM1" else FakeSerial(port)
+    assert K.find_relay_board("", serial_factory=factory, ports=["COM1", "COM2"]) == "COM2"
+    assert K.find_relay_board("COM2", serial_factory=factory, ports=["COM1"]) == "COM2"
+    assert K.find_relay_board("", serial_factory=factory, ports=["COM1"]) == ""
+
+
 def test_gpio_keyer_and_factory():
     class FakeRadio:
         def __init__(self):
@@ -91,7 +159,7 @@ def test_gpio_keyer_and_factory():
         def key(self, on):
             self.line = bool(on)
     r = FakeRadio()
-    k = K.make_keyer("gpio", radio=r)
+    k = K.make_keyer("gpio", radio=r, lna_guard_s=0.0, lna_release_s=0.0)
     k.key(True)
     assert r.line is True and k.keyed
     k.key(False)
@@ -99,13 +167,14 @@ def test_gpio_keyer_and_factory():
     n = K.make_keyer("none")
     n.key(True)
     assert isinstance(n, K.NullKeyer) and n.keyed
+    nothing = lambda p: (_ for _ in ()).throw(OSError("no port"))      # noqa: E731
     try:
-        K.make_keyer("usb_relay", port="")
-        assert False, "port required"
+        K.make_keyer("usb_relay", port="", serial_factory=nothing, ports=[])
+        assert False, "a board is required for the usb_relay kind"
     except ValueError:
         pass
-    u = K.make_keyer("usb_relay", port="COM5  USB-SERIAL CH340 (COM5)", channel=1)
-    assert isinstance(u, K.UsbRelayKeyer) and u.port == "COM5"
+    u = K.make_keyer("usb_relay", port="COM5  USB-SERIAL CH340 (COM5)", serial_factory=FakeSerial, ports=[])
+    assert isinstance(u, K.Sequencer) and u.outputs[0].port == "COM5" and not u.usb_missing
 
 
 if __name__ == "__main__":

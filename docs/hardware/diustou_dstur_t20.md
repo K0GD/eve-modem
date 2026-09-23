@@ -59,8 +59,10 @@ CH1:ON\r\n        43 48 31 3A 4F 4E 0D 0A
 CH2:OFF\r\n       43 48 32 3A 4F 46 46 0D 0A
 ```
 
-Switch commands are not acknowledged. The vendor's program waits 200 ms after a query
-and 50 ms after a switch command; the relays operate in about 10 ms.
+The wiki says switch commands are not acknowledged; **our boards do acknowledge each
+switch frame with the same `CHn:STATE` line, about 100 ms after the frame** (measured
+2026-09-23), so a reader must expect stray lines and drain before a query. A query's
+reply begins about 110 to 125 ms after the frame. The relays operate in about 10 ms.
 
 ## Differences from the LCUS protocol the modem first assumed
 

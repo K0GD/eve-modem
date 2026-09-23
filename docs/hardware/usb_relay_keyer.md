@@ -29,10 +29,15 @@ terminal program before trusting it (section "Bench check").
 | Power | from the USB port (the relays draw about 70 mA each when closed) |
 | Driver | CH340 (Windows 10/11 have it in Windows Update; radioconda's Linux kernels have `ch341`) |
 
-## Wiring for the sequencer
+## Wiring (the modem is the sequencer; design D24, 2026-09-23)
 
-- The sequencer's key input across **COM** and **NO** of relay 1 (open = key up, closed =
-  transmit). Relay 2 is spare (a second sequencer line, or the LNA DC control).
+- **Relay 1 = TX key**: COM and **NO** across the transmitter's key input (open = off,
+  closed = transmit).
+- **Relay 2 = LNA control**: COM and **NO** closed = LNA OFF; use COM/NC if the LNA
+  wants a contact that is closed while it is active. Either way, both relays released
+  (board unplugged, PC off) must leave the LNA active and the transmitter off.
+- The B210 GPIO_0 (TX) and GPIO_1 (LNA) carry the same two signals in parallel for a
+  station that keys through an external circuit instead of, or as well as, this board.
 - Keep the relay board's USB cable short and off the RF cables; the CH340 has no
   isolation from the PC, and the relay contact is the isolation to the station.
 - The board has no enclosure: a small ABS box with two cable glands, or heat-shrink over

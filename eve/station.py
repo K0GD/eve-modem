@@ -195,8 +195,9 @@ class Session:
         if not self.opts.tx_enabled:
             self.phase = "receive only (partner transmits)"
             return
+        settle = float(getattr(self.keyer, "settle_s", 0.0))     # the sequencer's LNA guard
         for c in self.sched.chunks:
-            t_on = c.tx_start - self.opts.t_lead_s
+            t_on = c.tx_start - self.opts.t_lead_s - settle
             t_off = c.tx_stop + self.opts.t_lag_s
             if not self._sleep_until(t_on):
                 return

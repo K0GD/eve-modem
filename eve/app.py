@@ -49,7 +49,8 @@ MODES = [("sim", "Software simulation (no radio)"),
 PREFIX = {"sim": "SIM", "bench": "BENCH", "interop": "INTEROP", "eme": "EME", "eve": "EVE"}
 TARGET = {"sim": "sim", "bench": "bench", "interop": "partner", "eme": "moon", "eve": "venus"}
 FULL_FRAMES = {"A": 473, "B": 247, "MATLAB": 540}
-KEYER_KINDS = {"none": "none", "B210 GPIO": "gpio", "USB relay board": "usb_relay"}
+KEYER_KINDS = {"none": "none", "TX key + LNA (USB relay board + B210 GPIO)": "sequencer"}
+_LEGACY_KEYER_KINDS = {"B210 GPIO": "TX key + LNA (USB relay board + B210 GPIO)", "USB relay board": "TX key + LNA (USB relay board + B210 GPIO)"}   # settings from before 2026-09-23
 
 # "Set defaults" for a run mode: every setting the mode cares about goes to the design
 # value (the design document's numbers; bench values from the 2026-09-11/12 loopback).
@@ -169,14 +170,18 @@ TIPS: Dict[str, str] = {
                  "program sets it to the station setting (OUT1 10 MHz at level 1, OUT2 disabled = 1 PPS) and waits "
                  "for lock before opening the radio. Untick for any other reference (the HP5065A rubidium and a PPS "
                  "source, or a GPSDO the program cannot talk to); the B210's own lock check still runs.",
-    "keyer_kind": "What closes the sequencer's key line while we transmit. none: nothing is keyed (loopback bench, "
-                  "simulation, receive only). B210 GPIO: J504 GPIO_0 through an isolated driver (needs the header brought "
-                  "out of the case). USB relay board: the LCUS-type CH340 relay board on a COM port; its normally-open "
-                  "contact across the sequencer input. The line rises T_lead before the RF and drops T_lag after.",
-    "keyer_port": "The relay board's COM port (Device Manager: USB-SERIAL CH340). CH340 boards are listed first; press "
-                  "Refresh after plugging one in. The port is opened before the radio, so a wrong port stops the run "
-                  "before any RF.",
-    "keyer_channel": "Which relay on the board keys the sequencer (1 or 2). The other is spare.",
+    "keyer_kind": "The station's transmit/receive switching, done by the modem (design 7.2, D24). none: nothing is "
+                  "switched (loopback bench, simulation, receive only). Otherwise two signals go out on two outputs in "
+                  "parallel: relay 1 of the USB relay board and B210 GPIO_0 = TX key (energized / high = transmit); relay 2 "
+                  "and GPIO_1 = LNA (energized / high = LNA off). Both released = receive, so an unplugged board or a dead "
+                  "PC leaves the feed in receive. Order: LNA off, guard, TX on ... TX off, release, LNA on.",
+    "keyer_port": "The USB relay board's COM port. 'auto' finds it (the board answers a status query; it may sit on a "
+                  "different port each day). If no board answers, the run continues on the GPIO lines alone and says so. "
+                  "The GPIO pins need an external circuit; GPIO_0 alone can drive a DB6NT-style sequencer (GPIO_1 is "
+                  "then ignored).",
+    "keyer_lna_guard_ms": "Time between switching the LNA off and keying the transmitter. The RF still starts T_lead "
+                          "(200 ms) after the key; this guard is added in front of it.",
+    "keyer_lna_release_ms": "Time between unkeying the transmitter and switching the LNA back on.",
     "mode:interop": "Compatibility test with ORI's own hardware and software, on the bench (cable and attenuator) "
                     "or across the room. Transmit only: we send the agreed message at the agreed UTC time and the "
                     "partner's receiver decodes it. Receive only: the partner transmits (their generator has no pilot: "
@@ -211,7 +216,7 @@ class Settings:
         "eme_chunk_s": 2.4, "eme_pa": False, "eme_t_off_min": 0.5, "eme_rtt_guard": 0.1, "eme_t_on_max": 300.0,
         "interop_dir": "Transmit only (the partner receives)", "interop_chunk_s": 300.0, "interop_search_frames": 30,
         "report_zoom": 100,
-        "keyer_kind": "none", "keyer_port": "", "keyer_channel": 1,
+        "keyer_kind": "none", "keyer_port": "auto", "keyer_lna_guard_ms": 50, "keyer_lna_release_ms": 50,
         # updates (the Workbench way): a manifest on gpstime, checked at start-up at most once a day
         "manifest_url": "https://gpstime.com/sw_distribution/eve-modem/manifest.json", "auto_check": True,
         "check_interval_hours": 24, "last_check_iso": "", "dismissed_version": "",
@@ -353,6 +358,7 @@ class RunController(QtCore.QObject):
     log = QtCore.Signal(str)
     session_ready = QtCore.Signal(object)          # RemoteSession, before frames arrive (GUI binds the panel)
     preview_ready = QtCore.Signal(str)
+    notice = QtCore.Signal(str)
     finished = QtCore.Signal(dict)                 # {"ok", "pdf", "session_id", "summary", "error"}
     state = QtCore.Signal(str)                     # idle | preparing | running | decoding
     session_done = QtCore.Signal()
@@ -478,6 +484,8 @@ class RunController(QtCore.QObject):
                 self.state.emit(msg[1])
         elif kind == "preview":
             self.preview_ready.emit(msg[1])
+        elif kind == "notice":
+            self.notice.emit(msg[1])
         elif kind == "session":
             self._saw_session = True
             self.session = RemoteSession(msg[1], self.abort)
@@ -779,6 +787,7 @@ class EveApp(QtWidgets.QMainWindow):
         self.ctl.session_ready.connect(self._session_ready)
         self.ctl.session_done.connect(self._session_done)
         self.ctl.preview_ready.connect(self._preview_ready)
+        self.ctl.notice.connect(self._notice)
         self.ctl.finished.connect(self._finished)
         self.ctl.state.connect(self._state)
         self.w: Dict[str, QtWidgets.QWidget] = {}
@@ -1008,12 +1017,12 @@ class EveApp(QtWidgets.QMainWindow):
         left.addWidget(gb)
 
         # keying
-        gb = QtWidgets.QGroupBox("Keying (the sequencer line)")
+        gb = QtWidgets.QGroupBox("Keying (TX key and LNA: the modem is the sequencer)")
         f = QtWidgets.QFormLayout(gb)
         self.w["keyer_kind"] = cb = QtWidgets.QComboBox()
-        cb.addItems(["none", "B210 GPIO", "USB relay board"])
+        cb.addItems(list(KEYER_KINDS))
         cb.currentTextChanged.connect(lambda _t: self._keyer_changed())
-        f.addRow("Keyer", cb)
+        f.addRow("Switching", cb)
         krow = QtWidgets.QHBoxLayout()
         self.w["keyer_port"] = pc = QtWidgets.QComboBox()
         pc.setEditable(True)
@@ -1022,15 +1031,30 @@ class EveApp(QtWidgets.QMainWindow):
         b.setToolTip("Re-scan the serial ports.")
         b.clicked.connect(self._refresh_ports)
         krow.addWidget(b)
-        self.btn_testkey = QtWidgets.QPushButton("Test key")
-        self.btn_testkey.setToolTip("Click the relay once: on for a second, then off, and log the board's status reply. "
-                                    "Nothing else is touched; the radio stays closed.")
-        self.btn_testkey.clicked.connect(self._test_key)
+        self.btn_testkey = QtWidgets.QPushButton("Test TX")
+        self.btn_testkey.setToolTip("Relay 1 (TX key) on for a second, then off; the board's status reply goes to the log. "
+                                    "The radio is not touched.")
+        self.btn_testkey.clicked.connect(lambda: self._test_output("tx"))
         krow.addWidget(self.btn_testkey)
-        f.addRow("Port", krow)
-        self.w["keyer_channel"] = sp = QtWidgets.QSpinBox()
-        sp.setRange(1, 2)
-        f.addRow("Relay channel", sp)
+        self.btn_testlna = QtWidgets.QPushButton("Test LNA")
+        self.btn_testlna.setToolTip("Relay 2 (LNA control) energized = LNA OFF for a second, then released.")
+        self.btn_testlna.clicked.connect(lambda: self._test_output("lna"))
+        krow.addWidget(self.btn_testlna)
+        f.addRow("USB board port", krow)
+        trow = QtWidgets.QHBoxLayout()
+        self.w["keyer_lna_guard_ms"] = sp = QtWidgets.QSpinBox()
+        sp.setRange(0, 2000)
+        sp.setSuffix(" ms")
+        trow.addWidget(QtWidgets.QLabel("LNA off to TX on"))
+        trow.addWidget(sp)
+        trow.addSpacing(12)
+        self.w["keyer_lna_release_ms"] = sp = QtWidgets.QSpinBox()
+        sp.setRange(0, 2000)
+        sp.setSuffix(" ms")
+        trow.addWidget(QtWidgets.QLabel("TX off to LNA on"))
+        trow.addWidget(sp)
+        trow.addStretch(1)
+        f.addRow("Guard times", trow)
         self.lbl_keyer = QtWidgets.QLabel("")
         self.lbl_keyer.setWordWrap(True)
         self.lbl_keyer.setStyleSheet(f"color: {TEAL};")
@@ -1263,6 +1287,8 @@ class EveApp(QtWidgets.QMainWindow):
             b.setChecked(b.property("mode") == mode)
         for key, wd in self.w.items():
             v = s.get(key)
+            if key == "keyer_kind":
+                v = _LEGACY_KEYER_KINDS.get(str(v), v)
             if isinstance(wd, QtWidgets.QCheckBox):
                 wd.setChecked(bool(v))
             elif isinstance(wd, QtWidgets.QComboBox):
@@ -1324,6 +1350,7 @@ class EveApp(QtWidgets.QMainWindow):
         keep = pc.currentText()
         pc.blockSignals(True)
         pc.clear()
+        pc.addItem("auto")
         for d in list_serial_ports():
             pc.addItem(d)
         if keep:
@@ -1336,37 +1363,49 @@ class EveApp(QtWidgets.QMainWindow):
 
     def _keyer_changed(self) -> None:
         k = KEYER_KINDS.get(self.w["keyer_kind"].currentText(), "none")
-        usb = k == "usb_relay"
-        self.w["keyer_port"].setEnabled(usb)
-        self.w["keyer_channel"].setEnabled(usb)
-        self.btn_testkey.setEnabled(usb)
-        self.lbl_keyer.setText({"none": "No key line: fine for the loopback bench, simulation, and receive only.",
-                                "gpio": "B210 J504 GPIO_0 (the pin marked 0 on the clone) through an isolated driver.",
-                                "usb_relay": "LCUS-type USB relay board: relay contact COM/NO across the sequencer's key input; "
-                                             "docs/hardware/usb_relay_keyer.md."}.get(k, ""))
+        seq = k == "sequencer"
+        for key in ("keyer_port", "keyer_lna_guard_ms", "keyer_lna_release_ms"):
+            self.w[key].setEnabled(seq)
+        self.btn_testkey.setEnabled(seq)
+        self.btn_testlna.setEnabled(seq)
+        self.lbl_keyer.setText({"none": "Nothing is switched: fine for the loopback bench, simulation, and receive only.",
+                                "sequencer": "Relay 1 / GPIO_0 = TX key (energized or high = transmit); relay 2 / GPIO_1 = LNA "
+                                             "(energized or high = LNA off). Both released = receive. The USB board is found by "
+                                             "itself; without it the GPIO lines carry on and the run says so. "
+                                             "docs/hardware/diustou_dstur_t20.md."}.get(k, ""))
 
-    def _test_key(self) -> None:
-        from .keyer import UsbRelayKeyer
-        port = self.w["keyer_port"].currentText().split()[0] if self.w["keyer_port"].currentText().strip() else ""
+    def _test_output(self, which: str) -> None:
+        """Click one relay of the USB board for a second (TX = relay 1, LNA = relay 2)."""
+        from .keyer import find_relay_board, UsbRelayBoard
+        hint = self.w["keyer_port"].currentText()
+        self.status.setText("looking for the USB relay board ...")
+        QtWidgets.QApplication.processEvents()
+        port = find_relay_board(hint)
         if not port:
-            self.status.setText("choose the relay board's COM port first")
+            self.status.setText("no USB relay board answered on any COM port")
+            self._log("test: no USB relay board answered (auto search of the COM ports)")
             return
         try:
-            k = UsbRelayKeyer(port, int(self.w["keyer_channel"].value()))
-            k.log = self._log
-            k.open()
-            self._log(f"test key on {port}: status {k.query()!r}")
-            k.key(True)
-            self._log("key DOWN (1 s)")
+            b = UsbRelayBoard(port)
+            b.log = self._log
+            b.open()
+            if which == "tx":
+                b.set_tx(True)
+                self._log(f"test: TX key relay energized on {port} (1 s)")
+            else:
+                b.set_lna(False)
+                self._log(f"test: LNA control relay energized = LNA OFF on {port} (1 s)")
             QtWidgets.QApplication.processEvents()
             time.sleep(1.0)
-            k.key(False)
-            self._log(f"key up; status {k.query()!r}; fault: {k.fault or 'none'}")
-            k.close()
-            self.status.setText(f"test key on {port}: {'FAULT ' + k.fault if k.fault else 'ok'}")
+            self._log(f"test: status {b.query()!r}")
+            b.set_tx(False)
+            b.set_lna(True)
+            self._log(f"test: released; status {b.query()!r}; fault: {b.fault or 'none'}")
+            b.close()
+            self.status.setText(f"test {which.upper()} on {port}: {'FAULT ' + b.fault if b.fault else 'ok'}")
         except Exception as e:      # noqa: BLE001
-            self._log(f"test key failed: {e}")
-            self.status.setText(f"test key failed: {e}")
+            self.status.setText(f"test {which.upper()} failed: {e}")
+            self._log(f"test {which.upper()} failed: {e}")
 
     def _reference_changed(self) -> None:
         ext = self.w["clock"].currentText() == "external" and self.mode() != "sim"
@@ -1531,6 +1570,15 @@ class EveApp(QtWidgets.QMainWindow):
         self.preview.setPlainText("building the schedule ...")
         if not self.ctl.start(self._values(), preview_only=True):
             self.preview.setPlainText("busy")
+
+    def _notice(self, text: str) -> None:
+        """Something the operator must know but that must not stop a timed run: a
+        non-modal box plus the status bar and the log."""
+        self.status.setText(text)
+        box = QtWidgets.QMessageBox(QtWidgets.QMessageBox.Warning, "EVE modem", text, QtWidgets.QMessageBox.Ok, self)
+        box.setModal(False)
+        box.show()
+        self._notice_box = box
 
     def _preview_ready(self, text: str) -> None:
         self.preview.setPlainText(text)

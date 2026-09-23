@@ -1,6 +1,19 @@
-"""The key line to the sequencer: B210 GPIO or a USB relay (design document 7.2).
+"""The station's transmit/receive switching: the modem IS the sequencer (design document
+7.2, decision D24 of 2026-09-23). Two signals, driven on two outputs in parallel:
 
-Two keyers, one interface:
+  TX key    relay 1 of the USB relay board  /  B210 GPIO_0     energized / high = transmit
+  LNA       relay 2 of the USB relay board  /  B210 GPIO_1     energized / high = LNA OFF
+
+Both de-energized (board unplugged, PC off, GPIO low) = LNA active, transmitter off: the
+feed is in receive mode whenever nothing is driving it. The GPIO pins need an external
+circuit; a typical use is GPIO_0 alone driving a DB6NT-style external sequencer, in which
+case GPIO_1 is simply ignored. The USB relay board is found by itself on whatever COM port
+it has today; if it is absent the run continues on the GPIO lines and the operator is told.
+
+Sequence: LNA off -> lna_guard -> TX on -> (T_lead) -> RF ... RF off -> (T_lag) -> TX off
+-> lna_release -> LNA on. Abort and finish take the same way out, transmitter first.
+
+The building blocks, one interface (Keyer.key(on) is the whole sequence):
 
   GpioKeyer(radio)                the B210's J504 GPIO_0 through an isolated driver (the
                                   original design; needs the header brought out)
@@ -89,7 +102,8 @@ class NullKeyer(Keyer):
 
 
 class GpioKeyer(Keyer):
-    """The B210 GPIO line through EveRadio.key (J504 GPIO_0, FP0 line 0)."""
+    """The B210 GPIO line through EveRadio.key (J504 GPIO_0, FP0 line 0). Kept for the
+    tools and tests; the station uses Sequencer([GpioLines(radio)])."""
     name = "B210 GPIO"
 
     def __init__(self, radio):
@@ -103,6 +117,253 @@ class GpioKeyer(Keyer):
             self.fault = ""
         except Exception as e:      # noqa: BLE001
             self.fault = str(e)
+
+
+# ---------------------------------------------------------------------------------------
+# the two station signals on their two kinds of output
+# ---------------------------------------------------------------------------------------
+class Output:
+    """One place the TX and LNA signals go. set_tx(True) = transmitter keyed;
+    set_lna(True) = LNA active (the de-energized / low state)."""
+    name = "output"
+    latency_s = 0.0          # worst-case time one set_tx / set_lna takes (the sequencer allows for it)
+
+    def __init__(self):
+        self.fault = ""
+        self.tx = False
+        self.lna = True
+
+    def open(self) -> None:
+        pass
+
+    def set_tx(self, on: bool) -> None:
+        self.tx = bool(on)
+
+    def set_lna(self, active: bool) -> None:
+        self.lna = bool(active)
+
+    def close(self) -> None:
+        pass
+
+
+class GpioLines(Output):
+    """B210 J504: GPIO_0 = TX key (high = transmit), GPIO_1 = LNA (high = LNA off). Through
+    EveRadio.set_lines when the radio has it (both bits at once), else EveRadio.key for
+    the TX bit alone (older radio objects, fakes)."""
+    name = "B210 GPIO"
+
+    def __init__(self, radio):
+        super().__init__()
+        self.radio = radio
+
+    def _write(self) -> None:
+        try:
+            if hasattr(self.radio, "set_lines"):
+                self.radio.set_lines(self.tx, self.lna)
+            else:
+                self.radio.key(self.tx)
+            self.fault = ""
+        except Exception as e:      # noqa: BLE001
+            self.fault = f"{type(e).__name__}: {e}"
+
+    def set_tx(self, on: bool) -> None:
+        self.tx = bool(on)
+        self._write()
+
+    def set_lna(self, active: bool) -> None:
+        self.lna = bool(active)
+        self._write()
+
+
+class UsbRelayBoard(Output):
+    """The DIUSTOU DSTUR-T20 (or an LCUS clone): relay 1 = TX key, relay 2 = LNA control.
+    Relay 2 energized = LNA OFF, so both relays off = receive."""
+    name = "USB relay board"
+    TX_RELAY, LNA_RELAY = 1, 2
+    ACK_WAIT_S = 0.35        # the DIUSTOU board answers each switch frame with "CHn:STATE" ~125 ms later
+    latency_s = ACK_WAIT_S
+
+    def __init__(self, port: str, serial_factory=None, baud: Optional[int] = None):
+        super().__init__()
+        self.port = port
+        self.name = f"USB relay board {port}"
+        self._k = UsbRelayKeyer(port, self.TX_RELAY, serial_factory=serial_factory, readback=True, baud=baud)
+
+    @property
+    def log(self):
+        return self._k.log
+
+    @log.setter
+    def log(self, fn):
+        self._k.log = fn
+
+    def open(self) -> None:
+        self._k.open()                       # probes the baud rate, every relay off, logs the reply
+        self.fault = self._k.fault
+
+    def _set(self, relay: int, energize: bool) -> None:
+        """Send the switch frame and wait for the board's acknowledgment line for that relay
+        (a frame sent while the board is still talking can be missed; measured 2026-09-23).
+        No acknowledgment within ACK_WAIT_S: send once more, then carry on (the state is
+        read back by the session's status query anyway)."""
+        want = f"CH{relay}:{'ON' if energize else 'OFF'}"
+        try:
+            for attempt in range(2):
+                with self._k._lock:
+                    try:
+                        self._k.ser.reset_input_buffer()
+                    except Exception:
+                        pass
+                    self._k.ser.write(relay_frame(relay, OP_ON if energize else OP_OFF))
+                    try:
+                        self._k.ser.flush()
+                    except Exception:
+                        pass
+                    seen = b""
+                    t0 = time.monotonic()
+                    while time.monotonic() - t0 < self.ACK_WAIT_S:
+                        chunk = self._k.ser.read(256)
+                        if chunk:
+                            seen += chunk
+                            if want.encode() in seen:
+                                break
+                if want.encode() in seen:
+                    break
+                self._k.log(f"USB relay {self.port}: no acknowledgment for {want}, sending again" if attempt == 0
+                            else f"USB relay {self.port}: {want} still not acknowledged")
+            self.fault = ""
+        except Exception as e:      # noqa: BLE001
+            self.fault = f"{type(e).__name__}: {e}"
+
+    def set_tx(self, on: bool) -> None:
+        self.tx = bool(on)
+        self._set(self.TX_RELAY, self.tx)
+
+    def set_lna(self, active: bool) -> None:
+        self.lna = bool(active)
+        self._set(self.LNA_RELAY, not self.lna)
+
+    def query(self) -> str:
+        return self._k.query()
+
+    def close(self) -> None:
+        try:
+            self._set(self.TX_RELAY, False)
+            self._set(self.LNA_RELAY, False)
+        except Exception:
+            pass
+        self._k.close()
+
+
+class Sequencer(Keyer):
+    """The station sequencer: drives every Output in parallel in the safe order.
+    key(True): LNA off, wait lna_guard_s, TX on. key(False): TX off, wait lna_release_s,
+    LNA on. `settle_s` (= lna_guard_s) is what the session adds to T_lead so the RF still
+    starts T_lead after the transmitter is keyed."""
+    name = "sequencer"
+
+    def __init__(self, outputs: List[Output], lna_guard_s: float = 0.05, lna_release_s: float = 0.05,
+                 usb_missing: bool = False):
+        super().__init__()
+        self.outputs = list(outputs)
+        self.lna_guard_s = float(lna_guard_s)
+        self.lna_release_s = float(lna_release_s)
+        self.usb_missing = usb_missing
+        self.lna_active = True
+        self.name = "sequencer: " + (" + ".join(o.name for o in self.outputs) if self.outputs else "no outputs")
+        if usb_missing:
+            self.name += " (USB relay board NOT FOUND)"
+
+    @property
+    def settle_s(self) -> float:
+        """What the session adds ahead of T_lead: the LNA guard plus the slowest output's
+        latency for the two switches key(True) performs."""
+        slow = max((o.latency_s for o in self.outputs), default=0.0)
+        return self.lna_guard_s + 2.0 * slow
+
+    def open(self) -> None:
+        for o in self.outputs:
+            o.log = self.log
+            o.open()
+        self._collect()
+        # receive state to begin with, whatever the hardware was left at
+        for o in self.outputs:
+            o.set_tx(False)
+            o.set_lna(True)
+        self._collect()
+
+    def _collect(self) -> None:
+        self.fault = "; ".join(f"{o.name}: {o.fault}" for o in self.outputs if o.fault)
+
+    def key(self, on: bool) -> None:
+        if on:
+            for o in self.outputs:
+                o.set_lna(False)
+            self.lna_active = False
+            time.sleep(self.lna_guard_s)
+            for o in self.outputs:
+                o.set_tx(True)
+            self.keyed = True
+        else:
+            for o in self.outputs:
+                o.set_tx(False)
+            self.keyed = False
+            time.sleep(self.lna_release_s)
+            for o in self.outputs:
+                o.set_lna(True)
+            self.lna_active = True
+        self._collect()
+
+    def close(self) -> None:
+        try:
+            self.key(False)
+        except Exception:
+            pass
+        for o in self.outputs:
+            try:
+                o.close()
+            except Exception:
+                pass
+
+    def status_text(self) -> str:
+        s = f"TX {'KEYED' if self.keyed else 'off'}, LNA {'active' if self.lna_active else 'OFF'} | {self.name}"
+        return s + (f" (fault: {self.fault})" if self.fault else "")
+
+
+def find_relay_board(port_hint: str = "", serial_factory=None, ports=None) -> str:
+    """The COM port of a relay board that answers a status query: the hint first (if it
+    answers), then every port that looks like one (DIUSTOU's STM32-style VCP, a CH340).
+    Returns '' when none answers. The board may sit on a different port every day."""
+    candidates: List[str] = []
+    if port_hint and port_hint.strip() and port_hint.strip().lower() != "auto":
+        candidates.append(port_hint.split()[0])
+    if ports is None:
+        try:
+            from serial.tools import list_ports
+            for p in list_ports.comports():
+                d = (p.description or "").upper()
+                if (p.vid, p.pid) in RELAY_VIDPIDS or "CH340" in d or "USB-SERIAL" in d or "VIRTUAL COMPORT" in d:
+                    candidates.append(p.device)
+        except Exception:
+            pass
+    else:
+        candidates.extend(ports)
+    seen = set()
+    for port in candidates:
+        if port in seen:
+            continue
+        seen.add(port)
+        k = UsbRelayKeyer(port, 1, serial_factory=serial_factory, readback=False)
+        try:
+            k.ser = k._open_port(RELAY_BAUDS[0])
+            time.sleep(0.05)
+            txt = k.query()
+            k.ser.close()
+        except Exception:
+            continue
+        if txt.upper().startswith("CH"):
+            return port
+    return ""
 
 
 class UsbRelayKeyer(Keyer):
@@ -126,7 +387,7 @@ class UsbRelayKeyer(Keyer):
         if self._factory is not None:
             return self._factory(self.port)
         import serial
-        return serial.Serial(self.port, baud, bytesize=8, parity="N", stopbits=1, timeout=0.3, write_timeout=0.5)
+        return serial.Serial(self.port, baud, bytesize=8, parity="N", stopbits=1, timeout=0.05, write_timeout=0.5)
 
     def open(self) -> None:
         """Open the port, find the baud rate (a status query must answer), put every relay
@@ -181,13 +442,23 @@ class UsbRelayKeyer(Keyer):
         try:
             for probe in (relay_frame(RELAY_ALL, OP_QUERY), b"\xff"):
                 with self._lock:
+                    # The DIUSTOU board also acknowledges every switch frame with a "CHn:STATE"
+                    # line about 100 ms later (measured 2026-09-23), so drain first, then read
+                    # until the line goes quiet (the reply is 8 lines on this firmware).
+                    time.sleep(0.3)             # two switch acknowledgments, ~125 ms each, may still be coming
                     try:
                         self.ser.reset_input_buffer()
                     except Exception:
                         pass
                     self.ser.write(probe)
-                    time.sleep(0.2)
-                    data = self.ser.read(256)        # the 2-channel board runs the 8-channel firmware: 8 lines
+                    data = b""
+                    t0 = time.monotonic()
+                    while time.monotonic() - t0 < 0.8:
+                        chunk = self.ser.read(256)
+                        if chunk:
+                            data += chunk
+                        elif data:
+                            break
                 txt = data.decode("ascii", "replace").strip()
                 if txt:
                     return txt
@@ -225,20 +496,32 @@ def list_serial_ports() -> List[str]:
     return [d for _, d in sorted(ports)]
 
 
-def make_keyer(kind: str, radio=None, port: str = "", channel: int = 1, log=None) -> Keyer:
-    """kind: 'none' | 'gpio' | 'usb_relay'."""
-    if kind == "gpio":
-        if radio is None or not hasattr(radio, "key"):
+def make_keyer(kind: str, radio=None, port: str = "", channel: int = 1, log=None,
+               lna_guard_s: float = 0.05, lna_release_s: float = 0.05, serial_factory=None, ports=None) -> Keyer:
+    """kind: 'none' | 'sequencer' (USB relay board if one answers + B210 GPIO lines when the
+    radio has them) | 'gpio' (GPIO lines only) | 'usb_relay' (the board only, must exist).
+    The USB board's port is `port` ('' or 'auto' = search). A sequencer whose USB board was
+    wanted but not found carries usb_missing=True: the caller tells the operator."""
+    if log is None:
+        log = lambda s: None       # noqa: E731
+    if kind in ("sequencer", "usb_relay"):
+        found = find_relay_board(port, serial_factory=serial_factory, ports=ports)
+        outputs: List[Output] = []
+        if found:
+            outputs.append(UsbRelayBoard(found, serial_factory=serial_factory))
+        elif kind == "usb_relay":
+            raise ValueError("no USB relay board answered on any port (Setup: Keying)")
+        gpio_ok = radio is not None and (hasattr(radio, "set_lines") or hasattr(radio, "key")) and not getattr(radio, "sim", False)
+        if kind == "sequencer" and gpio_ok:
+            outputs.append(GpioLines(radio))
+        k: Keyer = Sequencer(outputs, lna_guard_s, lna_release_s, usb_missing=(kind == "sequencer" and not found))
+    elif kind == "gpio":
+        if radio is None or not (hasattr(radio, "set_lines") or hasattr(radio, "key")):
             raise ValueError("GPIO keyer needs the B210")
-        k: Keyer = GpioKeyer(radio)
-    elif kind == "usb_relay":
-        if not port:
-            raise ValueError("USB relay keyer needs a serial port (Setup: Keyer port)")
-        k = UsbRelayKeyer(port.split()[0], channel)
+        k = Sequencer([GpioLines(radio)], lna_guard_s, lna_release_s)
     else:
         k = NullKeyer()
-    if log is not None:
-        k.log = log
+    k.log = log
     return k
 
 

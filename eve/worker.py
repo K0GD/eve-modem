@@ -191,15 +191,23 @@ class Runner:
             from .station import Session, SessionOptions
             opts = SessionOptions(out_dir=str(archive), live_decode=True, **opts_kw)
             from . import keyer as _keyer
-            kind = {"B210 GPIO": "gpio", "USB relay board": "usb_relay", "gpio": "gpio", "usb_relay": "usb_relay"}.get(cfg.get("keyer_kind", "none"), "none")
-            if mode == "sim" and kind == "gpio":
+            kind = {"B210 GPIO": "gpio", "USB relay board": "usb_relay", "gpio": "gpio", "usb_relay": "usb_relay",
+                    "sequencer": "sequencer"}.get(cfg.get("keyer_kind", "none"), "none")
+            if kind not in ("none",) and not kind.startswith("seq") and kind != "usb_relay" and kind != "gpio":
                 kind = "none"
-            if kind == "usb_relay":
-                self.send(("state", "opening the USB relay keyer"))
-            key = _keyer.make_keyer(kind, radio=radio, port=cfg.get("keyer_port", ""),
-                                    channel=int(cfg.get("keyer_channel", 1)), log=self.say)
+            if kind != "none":
+                self.send(("state", "finding the USB relay board / setting the GPIO lines"))
+            key = _keyer.make_keyer(kind, radio=radio, port=cfg.get("keyer_port", ""), log=self.say,
+                                    lna_guard_s=float(cfg.get("keyer_lna_guard_ms", 50)) / 1e3,
+                                    lna_release_s=float(cfg.get("keyer_lna_release_ms", 50)) / 1e3)
             key.open()                      # fails here, before any RF, if the port is wrong
             self.say(f"key line: {key.name}")
+            if getattr(key, "usb_missing", False):
+                msg = ("USB relay board NOT FOUND on any COM port: the run continues on the B210 GPIO lines only "
+                       "(GPIO_0 = TX key, GPIO_1 = LNA). If the station is keyed through the relay board, plug it in "
+                       "and start again.")
+                self.say("WARNING: " + msg)
+                self.send(("notice", msg))
             sess = Session(sched, model, radio, opts, log=self.say, keyer=key)
             probs = sess.preflight()
             if probs:
