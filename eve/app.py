@@ -43,11 +43,12 @@ from .display import OperatorPanel, NAVY, TEAL, mono, ABORT_STYLE, wrap_tooltips
 
 MODES = [("sim", "Software simulation (no radio)"),
          ("bench", "Bench loopback (one B210, no antenna)"),
+         ("siggen", "Signal generator (bench RF package test)"),
          ("interop", "Interop with a partner station (ORI): transmit only or receive only"),
          ("eme", "EME — Earth-Moon-Earth"),
          ("eve", "EVE — Earth-Venus-Earth")]
-PREFIX = {"sim": "SIM", "bench": "BENCH", "interop": "INTEROP", "eme": "EME", "eve": "EVE"}
-TARGET = {"sim": "sim", "bench": "bench", "interop": "partner", "eme": "moon", "eve": "venus"}
+PREFIX = {"sim": "SIM", "bench": "BENCH", "siggen": "SIGGEN", "interop": "INTEROP", "eme": "EME", "eve": "EVE"}
+TARGET = {"sim": "sim", "bench": "bench", "siggen": "siggen", "interop": "partner", "eme": "moon", "eve": "venus"}
 FULL_FRAMES = {"A": 473, "B": 247, "MATLAB": 540}
 KEYER_KINDS = {"none": "none", "TX key + LNA (USB relay board + B210 GPIO)": "sequencer"}
 _LEGACY_KEYER_KINDS = {"B210 GPIO": "TX key + LNA (USB relay board + B210 GPIO)", "USB relay board": "TX key + LNA (USB relay board + B210 GPIO)"}   # settings from before 2026-09-23
@@ -61,6 +62,10 @@ MODE_DEFAULTS = {
             "sim_seed": 1, "bench_chunk_s": 2.4, "bench_t_off_min": 0.5, "lead_s": 12.0},
     "bench": {"f_dial_mhz": 1296.0, "repeat": 2, "full_symbol": False, "tx_gain": 0.0, "rx_gain": 30.0,
               "bench_range_km": 0.15, "bench_chunk_s": 2.4, "bench_t_off_min": 0.5, "lead_s": 15.0},
+    "siggen": {"f_dial_mhz": 1296.0, "full_symbol": False, "tx_gain": 0.0, "siggen_signal": "CW", "siggen_offset_khz": 0.0,
+               "siggen_spacing_khz": 10.0, "siggen_level_db": -3.0, "siggen_duration_s": 60.0, "siggen_pa": False,
+               "siggen_sim": False, "siggen_sweep": False, "siggen_sweep_start_db": 0.0, "siggen_sweep_stop_db": 60.0, "siggen_sweep_step_db": 5.0,
+               "siggen_sweep_hold_s": 10.0, "lead_s": 15.0},
     "interop": {"f_dial_mhz": 1296.0, "repeat": 1, "full_symbol": True, "tx_gain": 30.0, "rx_gain": 30.0,
                 "interop_chunk_s": 300.0, "interop_search_frames": 30, "sky_start_now": True, "lead_s": 30.0},
     "eme": {"f_dial_mhz": 1296.0, "repeat": 2, "full_symbol": True, "tx_gain": 0.0, "rx_gain": 40.0,
@@ -182,6 +187,28 @@ TIPS: Dict[str, str] = {
     "keyer_lna_guard_ms": "Time between switching the LNA off and keying the transmitter. The RF still starts T_lead "
                           "(200 ms) after the key; this guard is added in front of it.",
     "keyer_lna_release_ms": "Time between unkeying the transmitter and switching the LNA back on.",
+    "mode:siggen": "The B210 as a bench source for the RF package: CW, two tones, or the EVE waveform, with the "
+                   "sequencer working exactly as in a session and the level adjustable while it runs (TX gain from "
+                   "the Radio group, digital scale here; both apply at once). For power-out and compression "
+                   "measurements on the bench instruments; the program records what it commanded, the meter is the truth.",
+    "siggen_signal": "CW: one tone at the dial frequency plus the offset. Two-tone: two equal tones spaced as set, "
+                     "around the offset (intermodulation). EVE waveform: the message's tone hops at the design frame "
+                     "rate, the real comb the amplifier will see.",
+    "siggen_offset_khz": "Where the tone (or the two-tone pair's center) sits relative to the dial frequency. 0 is the "
+                         "dial frequency itself (the LO is parked 300 kHz away, so 0 is clean).",
+    "siggen_spacing_khz": "Two-tone: the spacing between the two tones.",
+    "siggen_level_db": "Digital scale below full scale: the fine level control, applied instantly without touching the "
+                       "radio. Combine with TX gain (coarse, 0 to 89.75 dB). Both can be changed while the generator runs.",
+    "siggen_duration_s": "How long to transmit. With the amplifier limits ticked, longer than 300 s runs as chunks of "
+                         "300 s on and 240 s off, sequenced like a session.",
+    "siggen_pa": "Enforce the amplifier's 7.2 duty limits (300 s on / 240 s off). Tick whenever an amplifier is in the "
+                 "chain, even into a load.",
+    "siggen_sim": "Run the generator without a B210: the simulated radio takes the samples, while the sequencer (USB relay "
+                  "board and simulated GPIO), the live level controls, the sweep and the report all work as they would on "
+                  "the air. Use it to check the station wiring to the relays before the first real transmission.",
+    "siggen_sweep": "Step the TX gain from start to stop by the step, holding each level for the hold time, starting when "
+                    "the transmitter is keyed. Every step is time-stamped in the log and the report so meter readings "
+                    "line up with steps.",
     "mode:interop": "Compatibility test with ORI's own hardware and software, on the bench (cable and attenuator) "
                     "or across the room. Transmit only: we send the agreed message at the agreed UTC time and the "
                     "partner's receiver decodes it. Receive only: the partner transmits (their generator has no pilot: "
@@ -217,6 +244,9 @@ class Settings:
         "interop_dir": "Transmit only (the partner receives)", "interop_chunk_s": 300.0, "interop_search_frames": 30,
         "report_zoom": 100,
         "keyer_kind": "none", "keyer_port": "auto", "keyer_lna_guard_ms": 50, "keyer_lna_release_ms": 50,
+        "siggen_signal": "CW", "siggen_offset_khz": 0.0, "siggen_spacing_khz": 10.0, "siggen_level_db": -3.0,
+        "siggen_duration_s": 60.0, "siggen_pa": False, "siggen_sim": False, "siggen_sweep": False, "siggen_sweep_start_db": 0.0,
+        "siggen_sweep_stop_db": 60.0, "siggen_sweep_step_db": 5.0, "siggen_sweep_hold_s": 10.0,
         # updates (the Workbench way): a manifest on gpstime, checked at start-up at most once a day
         "manifest_url": "https://gpstime.com/sw_distribution/eve-modem/manifest.json", "auto_check": True,
         "check_interval_hours": 24, "last_check_iso": "", "dismissed_version": "",
@@ -293,6 +323,8 @@ class RemoteSession:
         self.model = None
         self.radio = _RemoteRadio(float(payload.get("t_offset", 0.0)), payload.get("radio", ""), bool(payload.get("sim")))
         self.gps_text = payload.get("gps", "")
+        if payload.get("generator"):
+            self.eph_text = payload["generator"]
         self.eph_text = ""
         self.acc = modem.SymbolAccumulator(self.p, self.sched.frame_map())
         self.phase = "preparing"
@@ -334,6 +366,8 @@ class RemoteSession:
             self.gps_text = d["gps"]
         if "eph" in d:
             self.eph_text = d["eph"]
+        if "generator" in d:
+            self.eph_text = d["generator"]
 
 
 FULL_THRESHOLD_DB = {"A": -0.6, "B": -1.7}     # design 2.4: 10 % message error, one pass, AWGN model
@@ -1038,7 +1072,9 @@ class EveApp(QtWidgets.QMainWindow):
         self.w["tx_gain"] = sp = QtWidgets.QDoubleSpinBox()
         sp.setRange(0.0, 89.75)
         sp.setSuffix(" dB")
-        sp.setToolTip("0 dB for the loopback bench (internal leakage is enough); the driver's input requirement sets it for the air")
+        sp.setToolTip("0 dB for the loopback bench (internal leakage is enough); the driver's input requirement sets it for the air. "
+                      "In the signal generator it applies while running.")
+        sp.valueChanged.connect(lambda v: self._live_level(tx_gain_db=float(v)))
         f.addRow("TX gain", sp)
         self.w["rx_gain"] = sp = QtWidgets.QDoubleSpinBox()
         sp.setRange(0.0, 76.0)
@@ -1180,6 +1216,66 @@ class EveApp(QtWidgets.QMainWindow):
         sp.setSuffix(" s")
         f.addRow("Minimum off time", sp)
         self.mode_stack.addWidget(gb)
+        # signal generator
+        gb = QtWidgets.QGroupBox("Signal generator")
+        gb.setToolTip(TIPS["mode:siggen"])
+        f = QtWidgets.QFormLayout(gb)
+        self.w["siggen_signal"] = cb = QtWidgets.QComboBox()
+        cb.addItems(["CW", "Two-tone", "EVE waveform"])
+        cb.setToolTip(TIPS["siggen_signal"])
+        f.addRow("Signal", cb)
+        self.w["siggen_offset_khz"] = sp = QtWidgets.QDoubleSpinBox()
+        sp.setRange(-500.0, 500.0)
+        sp.setDecimals(3)
+        sp.setSuffix(" kHz")
+        sp.setToolTip(TIPS["siggen_offset_khz"])
+        f.addRow("Offset from dial", sp)
+        self.w["siggen_spacing_khz"] = sp = QtWidgets.QDoubleSpinBox()
+        sp.setRange(0.001, 400.0)
+        sp.setDecimals(3)
+        sp.setSuffix(" kHz")
+        sp.setToolTip(TIPS["siggen_spacing_khz"])
+        f.addRow("Two-tone spacing", sp)
+        self.w["siggen_level_db"] = sp = QtWidgets.QDoubleSpinBox()
+        sp.setRange(-60.0, 0.0)
+        sp.setDecimals(1)
+        sp.setSingleStep(0.5)
+        sp.setSuffix(" dB")
+        sp.setToolTip(TIPS["siggen_level_db"])
+        sp.valueChanged.connect(lambda v: self._live_level(scale_db=float(v)))
+        f.addRow("Digital scale", sp)
+        self.w["siggen_duration_s"] = sp = QtWidgets.QDoubleSpinBox()
+        sp.setRange(1.0, 36000.0)
+        sp.setSuffix(" s")
+        sp.setToolTip(TIPS["siggen_duration_s"])
+        f.addRow("Duration", sp)
+        self.w["siggen_pa"] = ck = QtWidgets.QCheckBox("amplifier in the chain: enforce the 7.2 limits (300 s on / 240 s off)")
+        ck.setToolTip(TIPS["siggen_pa"])
+        f.addRow("PA", ck)
+        self.w["siggen_sim"] = ck = QtWidgets.QCheckBox("simulated radio (no B210): exercise the sequencer, the level controls and the report")
+        ck.setToolTip(TIPS["siggen_sim"])
+        f.addRow("Dry run", ck)
+        self.w["siggen_sweep"] = ck = QtWidgets.QCheckBox("timed TX-gain sweep")
+        ck.setToolTip(TIPS["siggen_sweep"])
+        f.addRow("Sweep", ck)
+        srow = QtWidgets.QHBoxLayout()
+        for key, label, lo, hi in (("siggen_sweep_start_db", "from", 0.0, 89.75), ("siggen_sweep_stop_db", "to", 0.0, 89.75),
+                                   ("siggen_sweep_step_db", "step", 0.25, 30.0), ("siggen_sweep_hold_s", "hold", 1.0, 600.0)):
+            self.w[key] = sp = QtWidgets.QDoubleSpinBox()
+            sp.setRange(lo, hi)
+            sp.setDecimals(2)
+            sp.setSuffix(" s" if key.endswith("_s") else " dB")
+            srow.addWidget(QtWidgets.QLabel(label))
+            srow.addWidget(sp)
+        srow.addStretch(1)
+        f.addRow("", srow)
+        self.lbl_siggen = QtWidgets.QLabel("While the generator runs, TX gain (Radio group) and the digital scale apply "
+                                           "at once; ABORT on the Run tab stops it. The report lists every level step.")
+        self.lbl_siggen.setWordWrap(True)
+        self.lbl_siggen.setStyleSheet(f"color: {TEAL};")
+        f.addRow("", self.lbl_siggen)
+        self.mode_stack.addWidget(gb)
+
         # interop
         gb = QtWidgets.QGroupBox("Interop with a partner station")
         f = QtWidgets.QFormLayout(gb)
@@ -1625,6 +1721,7 @@ class EveApp(QtWidgets.QMainWindow):
         m = self.mode()
         self.mode_stack.setCurrentIndex([k for k, _ in MODES].index(m))
         self.sky_box.setVisible(m in ("eme", "eve", "interop"))
+        self.w["tx_gain"].setEnabled(True)
         for key in ("sky_mode", "sky_source", "sky_precomp", "sky_rx_doppler"):
             self.w[key].setEnabled(m in ("eme", "eve"))
         radio = m != "sim"
@@ -1674,6 +1771,16 @@ class EveApp(QtWidgets.QMainWindow):
         else:
             self.lbl_ports.setText("")
 
+    def _live_level(self, tx_gain_db=None, scale_db=None) -> None:
+        """TX gain or digital scale changed while a signal-generator run is active: send the
+        changed value to the worker (applied at once; recorded as a level step). Only the
+        changed one goes, so turning the scale during a sweep leaves the sweep's gain alone."""
+        if self.mode() == "siggen" and self.ctl.busy and self.ctl.conn is not None and not self._loading:
+            try:
+                self.ctl.conn.send(("level", tx_gain_db, scale_db))
+            except Exception:
+                pass
+
     def _browse_archive(self) -> None:
         """Browse button: choose the archive folder and point the Report tab at it."""
         d = QtWidgets.QFileDialog.getExistingDirectory(self, "Archive folder", self.w["archive"].text() or ".")
@@ -1719,8 +1826,6 @@ class EveApp(QtWidgets.QMainWindow):
                                                "A partner station could not decode this. Start anyway?")
             if r != QtWidgets.QMessageBox.Yes:
                 return
-        if cfg["mode"] in ("eme", "eve") and float(cfg["tx_gain"]) > 0 and cfg["mode"] == "eve":
-            pass
         self.report.set_archive(cfg["archive"])
         self.preview.setPlainText("")
         if self.ctl.start(cfg):

@@ -511,6 +511,7 @@ Radio only in the two blocks that touch the radio:
 | `display.py` | Operator display (PySide6 and pyqtgraph): tone strip, accumulated metric of the current symbol, running decisions with margins, chunk and keying state, radio status, ephemeris, abort. `OperatorPanel` is re-bound to each session; `OperatorWindow` wraps it for the command-line tools. |
 | `decode.py` | The offline decode of an archive (the decision of record) and its summary, shared by the tools and the application. |
 | `report.py` | The session report PDF (8.4): verdict, decisions with margins per pass, timeline, per-window synchronization, key events. |
+| `siggen.py` | The signal generator (5.8, D25): a schedule of on-windows for a requested duration, a CW / two-tone / EVE-waveform source gated by it, a live level control (B210 TX gain and a digital scale), a timed gain sweep, and a one-page report of every level step and key event. |
 | `worker.py` | The run in its own process (radio, GPS clock, ephemeris, schedule, session, decode, report), talking to the application over a pipe. A fresh UHD per run: a second USRP source in one process crashed, and the constructor faults intermittently on Windows, so the application retries the open and survives a worker crash. |
 | `app.py` | The application (`eve_app.py`, desktop icon): one window for simulation, bench, EME and Venus runs with remembered settings (INI), the operator panel, and the report viewer; every control carries operator help. Runs repeat without restarting the program. |
 | `_workbench.py` | Finds the Workbench clone and imports its shared `dses_radio.py` (section 9). |
@@ -657,7 +658,7 @@ worker exits. Faults in the decode or the report are logged and do not lose the 
 
 ## 5.7 Test suite
 
-`tests/` (49 tests, run with `python -m pytest tests -q` in the project environment) are
+`tests/` (53 tests, run with `python -m pytest tests -q` in the project environment) are
 the executable form of the validation plan:
 
 <!-- widths: 1.6,5.1 -->
@@ -667,9 +668,41 @@ the executable form of the validation plan:
 | `test_eve_session.py` | Doppler and round trip from a Horizons table and from astropy; the schedule's chunking, frame map, JSON round trip and validation; pilot detection, grid search and the tracker on synthetic signals; SigMF export and import |
 | `test_eve_station_sim.py` | A whole session on the simulated radio: chunks keyed, archive windows of full length, live and offline decode of both passes, amplifier-limit preflight |
 | `test_eve_keyer.py` | Relay frames and checksums; the USB relay board against a fake port; the sequencer's order and states on both outputs; the GPIO-only fallback; board discovery |
+| `test_eve_siggen.py` | The generator's schedule (on-time adds up to the duration, chunked under the amplifier limits), the source's tones and gating, the sweep's levels, and a whole generator session on the simulated radio with a sweep and the report |
 | `test_eve_gpsdo.py` | The GPS clock's HID report decoding and the divider planner against the vendor's plan |
 | `test_eve_display.py` | The operator panel renders headless and binds a session |
 | `test_eve_app.py` | The application end to end, headless: settings, schedule preview, a simulated run through the worker process, the report rendered, a re-decode, a second run |
+
+## 5.8 Signal generator for the RF package
+
+Integrating the transmit chain (the 2 W driver, the 1200 W SSPA, filters, and the feed,
+7.1) needs a source that behaves like the modem, keys like the modem, and can be turned
+up and down while a power meter or spectrum analyzer watches the output. Rather than a
+separate instrument on the bench, the modem has a **signal generator run mode**
+(`siggen.py`, `eve_app.py` mode "Signal generator"; operator's guide 4.6):
+
+- **Signals.** CW at the dial frequency plus an offset; two equal tones at a set spacing
+  (intermodulation and compression); or the EVE waveform itself with the pilot, exactly
+  the session's transmission. The CW and two-tone sources are phase-continuous NCOs at
+  the radio rate, gated by the schedule's on-windows like `EveToneSource`.
+- **Timing and keying.** A schedule is built for the requested duration: one on-window,
+  or, with the amplifier in the chain, windows of at most T_on,max separated by
+  T_off,min (7.2) whose on-time still adds up to the duration. The sequencer (D24)
+  keys each window in the safe order, the watchdog and Abort release the transmitter
+  first, and the Run tab shows the key state. Nothing is received or decoded.
+- **Level.** The B210 TX gain (0 to 89.75 dB in 0.25 dB steps, set on the device while
+  streaming) is the coarse control and a digital multiplier before the sink (dB below
+  full scale) the fine one; both apply immediately from the Setup tab and every change
+  is logged with its UTC time. A timed sweep steps the gain from a start to a stop level
+  by a step, holding each for a set time, starting when the transmitter is keyed, so a
+  compression curve is one run against the meter's readings.
+- **Dry run.** The same run on the simulated radio, with the USB relay board and the
+  simulated GPIO lines: the station's wiring to the relays is checked with no RF at all.
+- **Report.** One page: settings, every level step, every key event, with times, in
+  the archive folder beside the schedule file.
+
+Reading the power meter and the spectrum analyzer into the report (the lab's
+instruments are reachable over the network) is a planned extension (O18).
 
 # 6. ICD part A — the air interface
 
@@ -941,6 +974,7 @@ code-sharing boundary, not a runtime one:
 | D22 | Host-timed keying with an 8 s arming lead for the radio streams | Timed GPIO did not defer on the bench build; flowgraph start with two streamers takes about 4 s (sections 7.1, 7.2) |
 | D23 | The station reference is a Leo Bodnar GPS reference clock, programmed by the modem: output 1 = 10 MHz at level 1, output 2 disabled = 1 PPS; internet NTP for the host clock | The HP5065A rubidium and the site NTP server failed (Rick, 2026-09-12); the clock's lock, the B210's lock to it, and the PPS-edge time set were proven on the bench the same day (section 7.1, 5.4) |
 | D24 | The modem is the station sequencer: it drives the TX key and the LNA control itself, on a 2-channel USB relay board and the B210 GPIO_0 / GPIO_1 in parallel, with the safe order and guard times; both signals released = receive | The station has no sequencer (Alex Nersesian, 2026-09-14). Fail-safe by polarity: nothing driving the lines leaves the LNA active and the transmitter off. The GPIO pair lets a station without the board key an external sequencer from GPIO_0 alone. Rick, 2026-09-23 (section 7.2) |
+| D25 | The modem carries its own bench signal generator: CW, two-tone or the EVE waveform, keyed by the sequencer, level adjustable live (TX gain and a digital scale) or stepped on a timer, with a dry run on the simulated radio | Integrating the driver, the SSPA and the feed needs a source that keys and times like the modem; a laboratory generator does not exercise the sequencer wiring. Meter integration deferred (O18). Rick, 2026-09-23 (section 5.8) |
 
 ## 10.2 Open issues
 
@@ -964,6 +998,7 @@ code-sharing boundary, not a runtime one:
 | O15 | Date-resolved albedo: ask ORI for ρ_eff on the March 2025 CAMRAS dates, to learn whether the validated value already reflects it, and for the 2028 window; raise at the ORI meetup of 2026-09-15 | DSES → ORI | Before Venus |
 | O16 | Closed 2026-09-12: reference lock and the PPS-edge time set proven with the GPS clock of D23; transmit frequency on the 53230A within 0.03 Hz of nominal at 1296.025 MHz (`tools/eve_txcw.py`; bench note `docs/bench/gpsdo_2026-09-12.md`). Stage 4 complete | Rick | Before EME test |
 | O17 | The CAMRAS Venus echoes of March 2025 through the receiver (stage 3's remaining item) | DSES | Before Venus |
+| O18 | Signal generator (5.8): read the power meter and the spectrum analyzer over the network into the sweep report, so the compression curve is recorded rather than copied from the meter | Rick | Bench integration of the RF package |
 
 # Appendix A — MATLAB simulation versus Python implementation
 
@@ -1063,4 +1098,4 @@ second implementation to compare against (O14).
 | Rev A draft 4 | 2026-09-10 | Table pagination (header keeps with first row, short tables whole); the monostatic-23 cm verdict with passes to combine; the 2028 apparition (geometry and link budget); beamwidth figures corrected (0.88° at 23 cm, 0.50° at 13 cm) |
 | Rev A draft 5 | 2026-09-10 | Issued to the EVE team for review (nine recipients, 17:57 MDT); section 7.1 gains the B210-to-RF-package cabling row (two coax plus key line) from the issuing email |
 | Rev B | 2026-09-11 | Team review comments incorporated. Michelle Thompson (ORI): the notebook's date-resolved distance (Skyfield, 40.81 million km on 2026-10-25) and dynamic Venus albedo (0.117 at conjunction, −1.1 dB) in section 2.2 (D17, O15); ORI's DEFCON-group receiver noted (section 1, O14). Alex Nersesian (DSES): the transverter covers 1296 to 1298 MHz only and is bypassed (D16); SSPA 1280 to 1300 MHz, 1200 W CW, at least 2 W drive; LNA sequencer, LNA DC control, 2 W driver, and receive bandpass filter to be built; a 2 kW 7/16 DIN load for the thermal test; the feed retunes (sections 2.3, 7.1 to 7.3, O2, O4 to O6). 1200 W rows in the link budget and Figure 2 |
-| Rev C | 2026-09-12 | Updated from the implementation of 2026-09-11 (modem core, ephemeris, schedule, synchronization, radio side, operator display; 36 tests; B210 loopback bench decoded): frame numbering and chunk-table semantics (4.1, 6.4, D18); the pilot's real capability and the one-frame timing tolerance (4.3, 4.5, D19); two-stage receive front end (5.3, D20); bistatic chunking (3.3, D21); host-timed keying and the 8 s arming lead (7.1, 7.2, D22); module table, validation status column, archive and session-log contents as built (5.1, 5.4, 8.2, 8.4); the shared radio module done (9); O16, O17. Same day: station reference decided after the Haswell HP5065A and NTP server failed: Leo Bodnar GPS reference clock, output 1 = 10 MHz at level 1 to REF IN, output 2 disabled = 1 PPS to PPS IN, programmed and checked by the modem (`gpsdo.py`, `--gpsdo`); host-timed fallback stated (4.3, 5.1, 7.1, D23); O3 closed; bench with the B210 locked and timed from the clock, both passes decoded, transmit frequency on the lab counter within 0.03 Hz (5.4); O16 closed, stage 4 complete. Application `eve_app.py` (5.1, 8.4): modes, remembered settings, report PDF, tooltips; keying pins named (7.2) Addendum 2026-09-23: D24 (the modem is the sequencer: TX key and LNA on the USB relay board and GPIO_0/1 in parallel; 7.2 keying outputs and sequencer timing rows; O5 narrowed); the relay board identified as the DIUSTOU DSTUR-T20 and bench-checked |
+| Rev C | 2026-09-12 | Updated from the implementation of 2026-09-11 (modem core, ephemeris, schedule, synchronization, radio side, operator display; 36 tests; B210 loopback bench decoded): frame numbering and chunk-table semantics (4.1, 6.4, D18); the pilot's real capability and the one-frame timing tolerance (4.3, 4.5, D19); two-stage receive front end (5.3, D20); bistatic chunking (3.3, D21); host-timed keying and the 8 s arming lead (7.1, 7.2, D22); module table, validation status column, archive and session-log contents as built (5.1, 5.4, 8.2, 8.4); the shared radio module done (9); O16, O17. Same day: station reference decided after the Haswell HP5065A and NTP server failed: Leo Bodnar GPS reference clock, output 1 = 10 MHz at level 1 to REF IN, output 2 disabled = 1 PPS to PPS IN, programmed and checked by the modem (`gpsdo.py`, `--gpsdo`); host-timed fallback stated (4.3, 5.1, 7.1, D23); O3 closed; bench with the B210 locked and timed from the clock, both passes decoded, transmit frequency on the lab counter within 0.03 Hz (5.4); O16 closed, stage 4 complete. Application `eve_app.py` (5.1, 8.4): modes, remembered settings, report PDF, tooltips; keying pins named (7.2) Addendum 2026-09-23: D24 (the modem is the sequencer: TX key and LNA on the USB relay board and GPIO_0/1 in parallel; 7.2 keying outputs and sequencer timing rows; O5 narrowed); the relay board identified as the DIUSTOU DSTUR-T20 and bench-checked; the signal generator run mode for the RF package integration (5.8, D25, O18) |

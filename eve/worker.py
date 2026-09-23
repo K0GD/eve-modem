@@ -47,9 +47,10 @@ class Runner:
     callable taking the pipe tuples listed in the module docstring). `poll_abort` returns the
     abort reason when the GUI asked for one, else None. Used in-process by the tools and
     tests, and by run_job in the worker process."""
-    def __init__(self, send, poll_abort=None):
+    def __init__(self, send, poll_abort=None, poll_commands=None):
         self.send = send                    # callable(tuple)
         self.poll_abort = poll_abort        # callable() -> Optional[str]
+        self.poll_commands = poll_commands  # callable() -> list of ("level", gain_db, scale_db) tuples
         self.session = None
 
     def say(self, s: str) -> None:
@@ -90,7 +91,9 @@ class Runner:
             want_gps = mode != "sim" and cfg["gpsdo"] and cfg["clock"] == "external" and not preview_only
 
             # radio
-            if mode == "sim":
+            if mode == "sim" or (mode == "siggen" and cfg.get("siggen_sim")):
+                # the software simulation, or the generator on the simulated radio (no B210:
+                # the sequencer, the level commands, the sweep and the report are exercised)
                 from .station import SimRadio
                 radio = SimRadio(p, cn0_db=float(cfg["sim_cn0"]), seed=int(cfg["sim_seed"]))
                 now = time.time()
@@ -119,6 +122,9 @@ class Runner:
                 self.say(st.summary())
                 self.say(f"rate error {radio.rate_error_ppm():+.3f} ppm; PPS verify {radio.verify_pps()}")
                 now = radio.device_time()
+
+            if mode == "siggen":
+                return self._run_generator(cfg, p, radio, f_dial, archive, now, gps_text, preview_only)
 
             # start time and ephemeris
             lead = float(cfg["lead_s"])
@@ -287,6 +293,95 @@ class Runner:
             self.session = None
             self.send(("state", "idle"))
 
+    def _run_generator(self, cfg: Dict, p, radio, f_dial: float, archive: Path, now: float, gps_text: str,
+                       preview_only: bool) -> Dict:
+        """The signal-generator job (eve/siggen.py, design 5.8 / D25): a schedule of on-windows
+        for the requested duration, the sequencer, the chosen signal through the transmit
+        sink, live level commands from the GUI, an optional gain sweep, a one-page report."""
+        from . import siggen as G
+        from .station import SessionOptions
+        from . import keyer as _keyer
+        duration = float(cfg.get("siggen_duration_s", 60.0))
+        pa = bool(cfg.get("siggen_pa", False))
+        t_start = now + float(cfg["lead_s"])
+        sid = f"SIGGEN-{time.strftime('%Y%m%d-%H%M%S', time.gmtime(t_start))}"
+        sched = G.build_generator_schedule(sid, t_start, f_dial, p, cfg["message"], duration, pa, pilot=cfg["pilot"])
+        desc = S.describe(sched)
+        signal = {"CW": "cw", "Two-tone": "two_tone", "EVE waveform": "eve"}.get(str(cfg.get("siggen_signal", "CW")), "cw")
+        sweep = None
+        if cfg.get("siggen_sweep"):
+            sweep = G.SweepSpec(float(cfg["siggen_sweep_start_db"]), float(cfg["siggen_sweep_stop_db"]),
+                                float(cfg["siggen_sweep_step_db"]), float(cfg["siggen_sweep_hold_s"]))
+        desc += (f"\nsignal generator: {signal}, offset {float(cfg.get('siggen_offset_khz', 0.0)):+.3f} kHz, "
+                 f"scale {float(cfg.get('siggen_level_db', -3.0)):+.1f} dB, TX gain {float(cfg['tx_gain']):.2f} dB, "
+                 f"{duration:.0f} s" + (f", amplifier limits on" if pa else "")
+                 + (f", sweep {sweep.start_db:g}..{sweep.stop_db:g} dB by {sweep.step_db:g} every {sweep.hold_s:g} s" if sweep else ""))
+        if preview_only:
+            self.send(("preview", desc))
+            return {"ok": True, "pdf": None, "preview": True}
+        self.say(desc)
+        sched.to_json(archive / f"{sid}.json")
+        kind = {"sequencer": "sequencer", "gpio": "gpio", "usb_relay": "usb_relay"}.get(cfg.get("keyer_kind", "none"), "none")
+        if kind != "none":
+            self.send(("state", "finding the USB relay board / setting the GPIO lines"))
+        key = _keyer.make_keyer(kind, radio=radio, port=cfg.get("keyer_port", ""), log=self.say,
+                                lna_guard_s=float(cfg.get("keyer_lna_guard_ms", 50)) / 1e3,
+                                lna_release_s=float(cfg.get("keyer_lna_release_ms", 50)) / 1e3)
+        key.open()
+        self.say(f"key line: {key.name}")
+        if getattr(key, "usb_missing", False):
+            msg = ("USB relay board NOT FOUND on any COM port: the generator runs with the B210 GPIO lines only "
+                   "(GPIO_0 = TX key, GPIO_1 = LNA).")
+            self.say("WARNING: " + msg)
+            self.send(("notice", msg))
+        opts = SessionOptions(out_dir=str(archive), live_decode=False, pa_in_chain=pa, tx_precompensate=False,
+                              rx_doppler_removal=False, start_margin_s=2.5 if getattr(radio, "sim", False) else 2.0,
+                              realtime_mode=not getattr(radio, "sim", False))
+        sess = G.GeneratorSession(sched, radio, opts, signal=signal, offset_hz=float(cfg.get("siggen_offset_khz", 0.0)) * 1e3,
+                                  spacing_hz=float(cfg.get("siggen_spacing_khz", 10.0)) * 1e3,
+                                  scale_db=float(cfg.get("siggen_level_db", -3.0)), tx_gain_db=float(cfg["tx_gain"]),
+                                  sweep=sweep, log=self.say, keyer=key,
+                                  on_step=lambda d: self.send(("status", {"phase": sess.phase, "generator": sess.status_line()})))
+        probs = sess.preflight()
+        if probs:
+            raise RuntimeError("preflight failed: " + "; ".join(probs))
+        self.session = sess
+        self.send(("session", {"schedule": sched.to_dict(), "t_offset": radio.device_time() - time.time(),
+                               "radio": getattr(radio, "status_text", lambda: "")(), "gps": gps_text,
+                               "sim": bool(getattr(radio, "sim", False)), "generator": sess.status_line()}))
+        stop = threading.Event()
+        th = threading.Thread(target=self._status_loop, args=(sess, radio, None, sched, stop, gps_text), daemon=True)
+        th.start()
+        self.send(("state", "running"))
+        try:
+            rep = sess.run()
+        finally:
+            stop.set()
+            self.phase("generator stopped: releasing the key line")
+            try:
+                sess.keyer.close()
+            except Exception:
+                pass
+            sess.release()
+            if radio is not None:
+                self.send(("state", "closing the radio"))
+                try:
+                    radio.close()
+                except Exception:
+                    pass
+            self.send(("session_done",))
+        pdf = archive / f"{sid}_report.pdf"
+        self.phase("writing the report")
+        try:
+            G.write_generator_report(sess, rep, pdf, extra={"GPS clock": gps_text} if gps_text else None)
+            self.say(f"report written: {pdf}")
+        except Exception as e:      # noqa: BLE001
+            self.say(f"report failed: {e}")
+            pdf = None
+        self.phase("ABORTED" if rep.aborted else "GENERATOR DONE", "fail" if rep.aborted else "ok")
+        return {"ok": not rep.aborted, "pdf": str(pdf) if pdf else None, "session_id": sid, "aborted": rep.aborted,
+                "summary": {"steps": sess.steps, "chunks_keyed": rep.chunks_keyed}}
+
     def _status_loop(self, sess, radio, model, sched, stop: threading.Event, gps_text: str) -> None:
         """Half-second status for the panel: phase, key, radio text, ephemeris; abort polls."""
         from . import gpsdo as _gpsdo
@@ -294,7 +389,16 @@ class Runner:
         g_absent = False
         n = 0
         while not stop.is_set():
+            if self.poll_commands is not None and hasattr(sess, "set_level"):
+                for cmd in self.poll_commands():
+                    if cmd and cmd[0] == "level":
+                        try:
+                            sess.set_level(tx_gain_db=cmd[1], scale_db=cmd[2])
+                        except Exception as e:      # noqa: BLE001
+                            self.say(f"level command failed: {e}")
             d = {"phase": sess.phase, "keyed": bool(sess.keyer.keyed), "key_text": sess.keyer.status_text()}
+            if hasattr(sess, "status_line"):
+                d["generator"] = sess.status_line()
             try:
                 if hasattr(radio, "status") and n % 4 == 0:
                     st = radio.status()
@@ -409,7 +513,7 @@ def run_job(cfg: Dict, preview_only: bool, conn, redecode: Optional[str] = None)
         faulthandler.enable(file=open(os.path.join(str(log_dir()), "fault.log"), "a"), all_threads=True)
     except Exception:
         pass
-    pending = {"abort": None}
+    pending = {"abort": None, "commands": []}
 
     def send(msg):
         try:
@@ -423,12 +527,20 @@ def run_job(cfg: Dict, preview_only: bool, conn, redecode: Optional[str] = None)
                 m = conn.recv()
                 if m and m[0] == "abort":
                     pending["abort"] = m[1] if len(m) > 1 else "operator abort"
+                elif m and m[0] == "stop":
+                    pending["abort"] = "operator stop"
+                elif m:
+                    pending["commands"].append(tuple(m))
         except Exception:
             pass
         why, pending["abort"] = pending["abort"], None
         return why
 
-    r = Runner(send, poll_abort)
+    def poll_commands():
+        cmds, pending["commands"] = pending["commands"], []
+        return cmds
+
+    r = Runner(send, poll_abort, poll_commands)
     if redecode:
         result = r.redecode(Path(redecode))
     else:

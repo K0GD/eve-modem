@@ -95,7 +95,9 @@ verified updates over itself. Procedure: `docs/Release_Workflow.md`;
   `gpsdo.py` (Leo Bodnar GPS reference clock over USB HID: status, configuration,
   exact divider planner, setup and lock check; `--gpsdo` on the session and bench
   tools; bench note in `docs/bench/`). `decode.py` (offline decode, the decision of
-  record), `report.py` (session report PDF), `app.py` (the application window).
+  record), `report.py` (session report PDF), `siggen.py` (the bench signal generator:
+  CW, two-tone or the EVE waveform through the sequencer, live level and timed
+  gain sweep, one-page report), `app.py` (the application window).
 - `tools/` — `eve_session.py` (plan a session from Horizons, run a schedule on
   the radio, or `sim` it), `eve_decode.py` (offline decode of an archive, the
   decision of record), `eve_bench.py` (B210 loopback: transmit at minimum gain,

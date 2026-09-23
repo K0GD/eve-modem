@@ -4,8 +4,8 @@
 | | |
 |---|---|
 | Document | DSES EVE Modem Operator's Guide |
-| Revision | Rev B — DRAFT (program 1.0.6) |
-| Date | 2026-09-14 |
+| Revision | Rev C — DRAFT (program 1.0.7) |
+| Date | 2026-09-23 |
 | Prepared by | Rick Hambly, K0GD, Deep Space Exploration Society |
 | Companion | DSES EVE Modem Design Description and ICD (Rev C): the why behind every setting |
 | Where it lives | This text is the application's Help → Operator's guide, and `docs/DSES_EVE_Modem_Operators_Guide.pdf` |
@@ -79,6 +79,7 @@ Every control has a tooltip: hover over it or its label. The essentials:
 |---|---|
 | Software simulation | No radio. Proves the decoder and the display at a chosen signal-to-noise. Run it first on any new PC. |
 | Bench loopback | One B210, nothing on the antenna ports. Transmits at low gain, receives its own internal leakage. Proves the radio, the reference, the archive, and the decoder before anything goes on the air. |
+| Signal generator | The B210 as a bench source for the RF package: CW, two tones, or the EVE waveform at the dial frequency, with the sequencer working and the level adjustable while it runs (TX gain in 0.25 dB steps and a digital scale) or stepped on a timer. For power-out, compression, and tuning measurements on the 23 cm and 13 cm packages, and for checking the station's wiring to the relays and GPIO lines with no RF at all. See section 4.6. |
 | Interop with a partner station | Compatibility test with ORI's own hardware and software, on the bench through a cable and attenuator or across the room: transmit only (their receiver decodes us) or receive only (their generator transmits, we archive and decode). No Doppler, no round trip, no amplifier limits. See section 7.1. |
 | EME | Moon bounce. Ephemeris from JPL Horizons, Doppler pre-compensated, transmit 2.4 s then listen for the 2.5 s echo, repeat. The rehearsal before Venus. |
 | EVE | Venus bounce. 240 s transmit chunks against the 272 s round trip. A full message is 30.2 minutes per pass; plan five passes. |
@@ -183,6 +184,40 @@ schedule, and switches to the Run tab. The first chunk starts after the lead tim
 
 **ABORT** releases the key line at once, stops the streams, closes the archive, and
 writes the log. Use it for any fault. The same button is on the Run tab.
+
+## 4.6 Signal generator
+
+The **Signal generator** run mode turns the B210 into the bench source for integrating
+the RF package: driver, amplifier, filters, feed, and the sequencer wiring. It transmits
+for the duration you set and nothing else: no receive window, no decode. The **Signal
+generator** group holds its settings.
+
+<!-- widths: 1.4,5.3 -->
+| Setting | What it does |
+|---|---|
+| Signal | **CW**: one tone at the dial frequency plus the offset. **Two-tone**: two equal tones centered on the offset and spaced as set; the two-tone test shows an amplifier's intermodulation and the onset of compression. **EVE waveform**: the real 4096-FSK message with the pilot, exactly what a session sends. |
+| Offset | Where the tone sits relative to the dial frequency (0 puts it on the dial; the modem's own IF comb sits 25 kHz above). |
+| Spacing | Two-tone only: the distance between the two tones. |
+| Digital scale | The fine level: dB below full scale, applied instantly. Combine with **TX gain** in the Radio group (coarse, 0 to 89.75 dB in 0.25 dB steps). Both can be changed while the generator runs; every change is logged with its time and goes into the report. |
+| Duration | How long to transmit. With **PA** ticked the run is chunked by the amplifier limits (300 s on, 240 s off) and the total on-time still adds up to the duration. |
+| PA | Enforce the amplifier duty limits. Tick whenever an amplifier is in the chain. |
+| Dry run | Run on the simulated radio, no B210: the sequencer (relay board and simulated GPIO), the level controls, the sweep, and the report all work as they would on the air. Use it to check the station's wiring to the relays before the first real transmission, without risking a kilowatt. |
+| Sweep | Step the TX gain from the start to the stop level by the step, holding each level for the hold time, beginning when the transmitter is keyed. A compression curve in one run: note the meter reading at each step against the times in the log, or read them off the report. |
+
+The sequencer works here as in every other mode: the transmitter is keyed at the start
+of each on-window in the safe order (LNA off, guard, TX key) and released at its end
+(TX off, release, LNA on), the key lamp on the Run tab shows the state, and Abort drops
+the transmitter first. The Run tab's radio box shows the generator line: the signal,
+the current TX gain and scale, and the sweep. The report is a single page: the settings,
+every level step with its UTC time, and the key events; it lands in the archive folder
+with the schedule file.
+
+A typical bench session: a **Dry run** first to see the relays click in the right order;
+then the B210 into the driver at **TX gain** 0 and **Digital scale** -20 dB with the
+power meter on the output; raise the gain until the meter reads the driver's rated
+output; then a **Sweep** across the last 20 dB in 1 dB steps to find the 1 dB compression
+point. Never run the generator into the amplifier without the load or the antenna
+connected, and keep **PA** ticked whenever the amplifier is in the chain.
 
 # 5. The Run tab: what to watch
 
