@@ -4,22 +4,28 @@ Two keyers, one interface:
 
   GpioKeyer(radio)                the B210's J504 GPIO_0 through an isolated driver (the
                                   original design; needs the header brought out)
-  UsbRelayKeyer(port, channel)    an LCUS-type USB serial relay board (CH340, 9600 8N1):
-                                  the 2-channel USB-C board Rick ordered 2026-09-13
-                                  (Amazon B0DJVM768T). Its normally-open contact keys the
-                                  sequencer. The keying is host-timed either way (D22),
-                                  so the relay costs nothing in timing beyond its own
-                                  ~10 ms operate time, which T_lead covers.
+  UsbRelayKeyer(port, channel)    a USB serial relay board: the DIUSTOU DSTUR-T20 (2
+                                  channels, USB-C, optocoupler isolated; Amazon
+                                  B0DJVM768T, two received 2026-09-23) or any LCUS-type
+                                  clone. Its normally-open contact keys the sequencer.
+                                  The keying is host-timed either way (D22), so the
+                                  relay costs nothing in timing beyond its own ~10 ms
+                                  operate time, which T_lead covers.
 
-LCUS protocol (chinalctech LCUS-1/LCUS-2 family, as sold under many brand names):
-  9600 baud, 8N1, no flow control. Four-byte frames:
-      0xA0  channel  state  checksum        checksum = (0xA0 + channel + state) & 0xFF
-  channel 0x01 or 0x02, state 0x01 = relay closed (on), 0x00 = open (off).
+Protocol (DIUSTOU "USB Relay (TC, n, Opto)" family, docs/hardware/diustou_dstur_t20.md;
+the LCUS clones use the same switch frames):
+  8N1, no flow control; 115200 baud on the DIUSTOU boards, 9600 on LCUS clones (open()
+  probes 115200 then 9600 with a status query and keeps the one that answers).
+  Four-byte frames:
+      0xA0  address  operation  checksum      checksum = (0xA0 + address + operation) & 0xFF
+  address 0x01.. = channel, 0x0F = all channels; operation 0x01 = relay closed (on),
+  0x00 = open (off), 0x02 = query.
       relay 1 on   A0 01 01 A2        relay 1 off  A0 01 00 A1
       relay 2 on   A0 02 01 A3        relay 2 off  A0 02 00 A2
-  A single byte 0xFF asks for the state; the board answers with ASCII text such as
-  "CH1:ON" / "CH1:OFF" (one line per channel on the 2-channel board). The reply is used
-  here only as a read-back check; keying never waits on it.
+      all off      A0 0F 00 AF        query all    A0 0F 02 B1
+  A query is answered in ASCII, one line per channel, "CH1:ON\r\n" / "CH2:OFF\r\n".
+  LCUS clones answer a single 0xFF byte instead; query() tries the frame first, then
+  0xFF. The reply is used here only as a read-back check; keying never waits on it.
 
 A keyer never raises out of key(): a failure to key is reported through .fault and the
 session's watchdog / operator, not by killing the run mid-chunk. Opening the port is
@@ -32,14 +38,24 @@ import time
 from typing import List, Optional
 
 LCUS_BAUD = 9600
+RELAY_BAUDS = (115200, 9600)        # DIUSTOU boards, then LCUS clones
 LCUS_HEAD = 0xA0
+RELAY_ALL = 0x0F
+OP_OFF, OP_ON, OP_QUERY = 0x00, 0x01, 0x02
+
+
+def relay_frame(address: int, op: int) -> bytes:
+    """A0 address op checksum: address 1..8 or RELAY_ALL, op OP_OFF / OP_ON / OP_QUERY."""
+    if address != RELAY_ALL and address not in range(1, 9):
+        raise ValueError("relay channel is 1..8 or 0x0F (all)")
+    if op not in (OP_OFF, OP_ON, OP_QUERY):
+        raise ValueError("relay operation is 0 (off), 1 (on) or 2 (query)")
+    return bytes([LCUS_HEAD, address, op, (LCUS_HEAD + address + op) & 0xFF])
 
 
 def lcus_frame(channel: int, on: bool) -> bytes:
-    if channel not in (1, 2, 3, 4):
-        raise ValueError("LCUS channel is 1..4")
-    state = 1 if on else 0
-    return bytes([LCUS_HEAD, channel, state, (LCUS_HEAD + channel + state) & 0xFF])
+    """Switch frame for one channel (the LCUS name is kept for the callers and tests)."""
+    return relay_frame(channel, OP_ON if on else OP_OFF)
 
 
 class Keyer:
@@ -94,58 +110,88 @@ class UsbRelayKeyer(Keyer):
     `channel` 1 or 2; `serial_factory` lets tests substitute a fake port."""
     name = "USB relay"
 
-    def __init__(self, port: str, channel: int = 1, serial_factory=None, readback: bool = True):
+    def __init__(self, port: str, channel: int = 1, serial_factory=None, readback: bool = True,
+                 baud: Optional[int] = None):
         super().__init__()
         self.port = port
         self.channel = int(channel)
         self._factory = serial_factory
         self.readback = readback
+        self.baud = baud                    # None = probe RELAY_BAUDS at open()
         self.ser = None
         self._lock = threading.Lock()
         self.name = f"USB relay {port} ch{channel}"
 
-    def open(self) -> None:
+    def _open_port(self, baud: int):
         if self._factory is not None:
-            self.ser = self._factory(self.port)
-        else:
-            import serial
-            self.ser = serial.Serial(self.port, LCUS_BAUD, bytesize=8, parity="N", stopbits=1, timeout=0.3, write_timeout=0.5)
-        time.sleep(0.05)
-        self.key(False)                      # a known state before any RF
-        if self.readback:
+            return self._factory(self.port)
+        import serial
+        return serial.Serial(self.port, baud, bytesize=8, parity="N", stopbits=1, timeout=0.3, write_timeout=0.5)
+
+    def open(self) -> None:
+        """Open the port, find the baud rate (a status query must answer), put every relay
+        in a known OFF state before any RF, and log the board's reply."""
+        bauds = (self.baud,) if self.baud else RELAY_BAUDS
+        txt = ""
+        for i, baud in enumerate(bauds):
+            self.ser = self._open_port(baud)
+            time.sleep(0.05)
             txt = self.query()
-            self.log(f"USB relay on {self.port}: {txt or 'no status reply (the board keys anyway)'}")
+            if txt.upper().startswith("CH") or i == len(bauds) - 1:
+                self.baud = baud
+                break
+            try:
+                self.ser.close()
+            except Exception:
+                pass
+        try:
+            self._write(relay_frame(RELAY_ALL, OP_OFF))  # a known state before any RF
+            self.fault = ""
+        except Exception as e:      # noqa: BLE001
+            self.fault = f"{type(e).__name__}: {e}"
+        self.keyed = False
+        if self.readback:
+            self.log(f"USB relay on {self.port} at {self.baud} baud: "
+                     f"{txt.replace(chr(13), '').replace(chr(10), ' ').strip() or 'no status reply (the board keys anyway)'}")
+
+    def _write(self, frame: bytes) -> None:
+        with self._lock:
+            self.ser.write(frame)
+            try:
+                self.ser.flush()
+            except Exception:
+                pass
 
     def key(self, on: bool) -> None:
         if self.ser is None:
             self.fault = "port not open"
             return
         try:
-            with self._lock:
-                self.ser.write(lcus_frame(self.channel, on))
-                try:
-                    self.ser.flush()
-                except Exception:
-                    pass
+            self._write(lcus_frame(self.channel, on))
             self.keyed = bool(on)
             self.fault = ""
         except Exception as e:      # noqa: BLE001
             self.fault = f"{type(e).__name__}: {e}"
 
     def query(self) -> str:
-        """Ask the board for its relay states (0xFF); returns the ASCII reply or ''."""
+        """Ask the board for its relay states; returns the ASCII reply ('CH1:ON\r\nCH2:OFF')
+        or ''. DIUSTOU frame first (A0 0F 02 B1), then the LCUS clones' single 0xFF."""
         if self.ser is None:
             return ""
         try:
-            with self._lock:
-                try:
-                    self.ser.reset_input_buffer()
-                except Exception:
-                    pass
-                self.ser.write(b"\xff")
-                time.sleep(0.15)
-                data = self.ser.read(64)
-            return data.decode("ascii", "replace").strip()
+            for probe in (relay_frame(RELAY_ALL, OP_QUERY), b"\xff"):
+                with self._lock:
+                    try:
+                        self.ser.reset_input_buffer()
+                    except Exception:
+                        pass
+                    self.ser.write(probe)
+                    time.sleep(0.2)
+                    data = self.ser.read(256)        # the 2-channel board runs the 8-channel firmware: 8 lines
+                txt = data.decode("ascii", "replace").strip()
+                if txt:
+                    return txt
+            return ""
         except Exception as e:      # noqa: BLE001
             self.fault = f"{type(e).__name__}: {e}"
             return ""
@@ -160,16 +206,22 @@ class UsbRelayKeyer(Keyer):
             self.ser = None
 
 
+RELAY_VIDPIDS = {(0x1A86, 0x7523), (0x0483, 0x5740)}     # CH340; STM32/GD32 virtual COM port
+
+
 def list_serial_ports() -> List[str]:
-    """COM ports with a description, CH340 boards first (the LCUS chip)."""
+    """COM ports with a description, relay boards first: the DIUSTOU DSTUR-T20 enumerates
+    as an STM32-style virtual COM port (VID 0483 PID 5740, Windows calls it 'USB Serial
+    Device'), LCUS clones as a CH340."""
     try:
         from serial.tools import list_ports
     except Exception:
         return []
     ports = []
     for p in list_ports.comports():
-        desc = f"{p.device}  {p.description}"
-        ports.append((0 if "CH340" in (p.description or "").upper() or "USB-SERIAL" in (p.description or "").upper() else 1, desc))
+        d = (p.description or "").upper()
+        first = (p.vid, p.pid) in RELAY_VIDPIDS or "CH340" in d or "USB-SERIAL" in d or "VIRTUAL COMPORT" in d
+        ports.append((0 if first else 1, f"{p.device}  {p.description}"))
     return [d for _, d in sorted(ports)]
 
 

@@ -1,4 +1,12 @@
-# USB relay keyer: the LCUS-2 type 2-channel USB-C relay board
+# USB relay keyer: the 2-channel USB-C relay board
+
+> **2026-09-23: the boards arrived and are DIUSTOU DSTUR-T20 units, not LCUS clones.**
+> The documentation of record is `diustou_dstur_t20.md` beside this file (with the
+> vendor's PDF and example program). Differences from what is written below: the serial
+> protocol runs at **115200 baud** (the board enumerates as a native USB "STM32 Virtual
+> ComPort" rather than a CH340, so the rate is nominal), the status query is the framed
+> `A0 0F 02 B1`, and address `0F` addresses both relays. `eve/keyer.py` handles both
+> families. The wiring and sequencer sections below still apply.
 
 Ordered 2026-09-13 (two units): Amazon B0DJVM768T, "2 Channels USB Relay Module, 5V Type C
 Interface". It is the widely cloned **LCUS-2** design from chinalctech (sold as JESSINIE,

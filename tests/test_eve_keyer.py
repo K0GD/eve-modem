@@ -21,7 +21,9 @@ class FakeSerial:
         self.written += b
         if len(b) == 4 and b[0] == 0xA0:
             assert b[3] == (b[0] + b[1] + b[2]) & 0xFF, "bad checksum"
-            self.states[b[1]] = bool(b[2])
+            if b[2] in (0, 1):                                   # switch; 2 = query
+                for ch in (self.states if b[1] == 0x0F else [b[1]]):
+                    self.states[ch] = bool(b[2])
         return len(b)
 
     def flush(self):
@@ -38,6 +40,9 @@ class FakeSerial:
 
 
 def test_lcus_frames():
+    assert K.relay_frame(K.RELAY_ALL, K.OP_OFF) == bytes.fromhex("A00F00AF")
+    assert K.relay_frame(K.RELAY_ALL, K.OP_QUERY) == bytes.fromhex("A00F02B1")
+    assert K.relay_frame(2, K.OP_QUERY) == bytes.fromhex("A00202A4")
     assert K.lcus_frame(1, True) == bytes.fromhex("A00101A2")
     assert K.lcus_frame(1, False) == bytes.fromhex("A00100A1")
     assert K.lcus_frame(2, True) == bytes.fromhex("A00201A3")
@@ -55,9 +60,9 @@ def test_usb_relay_keyer_with_fake_port():
     k.log = logs.append
     k.open()
     f = fakes["COM9"]
-    assert f.written.endswith(bytes.fromhex("A00200A2")) or bytes.fromhex("A00200A2") in f.written   # opened with the relay off
+    assert bytes.fromhex("A00F00AF") in f.written                # opened with every relay off
     assert not k.keyed and k.fault == ""
-    assert "CH2:OFF" in logs[0]
+    assert "CH2:OFF" in logs[0] and "115200" in logs[0]        # the first probe answered
     k.key(True)
     assert k.keyed and f.states[2] is True and f.states[1] is False
     assert "CH2:ON" in k.query()
