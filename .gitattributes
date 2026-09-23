@@ -8,5 +8,6 @@
 *.desktop   text eol=lf
 *.py        text eol=lf
 *.yml       text eol=lf
+.githooks/* text eol=lf
 # Windows-native scripts are safest with CRLF (cmd.exe quirks):
 *.bat       text eol=crlf

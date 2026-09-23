@@ -4,6 +4,8 @@
 # The NAS bare repo (origin) stays the master. GitHub holds a read-only copy for the
 # team and ORI, with the private working notes (CLAUDE.md) removed from EVERY commit:
 # a fresh clone of the local repo is rewritten with git filter-repo, then force-pushed.
+# The public history carries each commit's author only: co-author trailers are removed
+# from every commit and tag message, and the push is refused if one survives.
 # The rewrite is deterministic, so repeated runs produce the same history and the
 # mirror's commit ids stay stable; tags are carried across.
 #
@@ -17,7 +19,10 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO="${GITHUB_REPO:-K0GD/eve-modem}"
 URL="https://github.com/${REPO}.git"
-EXCLUDE=(CLAUDE.md)                 # private working notes; add paths here if needed
+EXCLUDE=(CLAUDE.md .githooks)       # private working notes and local hooks; add paths here if needed
+# filter-repo message callback (Python, bytes): drop co-author trailer lines
+TRAILERS='import re
+return re.sub(rb"(?im)^[ \t]*co-authored-by:[^\n]*(?:\n|$)", b"", message).rstrip() + b"\n"'
 
 if [ -n "$(git -C "$here" status --porcelain)" ]; then
     echo "working tree not clean; commit or stash first" >&2
@@ -40,10 +45,14 @@ git clone -q --no-local "$here" "$work/mirror"
 cd "$work/mirror"
 args=()
 for p in "${EXCLUDE[@]}"; do args+=(--path "$p"); done
-echo "== removing ${EXCLUDE[*]} from every commit"
-git filter-repo --quiet --invert-paths "${args[@]}"
+echo "== removing ${EXCLUDE[*]} from every commit; co-author trailers from every message"
+git filter-repo --quiet --invert-paths "${args[@]}" --message-callback "$TRAILERS"
 if git log --all --name-only --format= -- "${EXCLUDE[@]}" | grep -q .; then
     echo "filter failed: excluded paths still present" >&2
+    exit 1
+fi
+if { git log --all --format=%B; git for-each-ref refs/tags --format='%(contents)'; } | grep -qi '^[[:space:]]*co-authored-by:'; then
+    echo "filter failed: a co-author trailer is still present" >&2
     exit 1
 fi
 echo "== $(git rev-list --count main) commits, $(git tag | wc -l | tr -d ' ') tags after filtering"

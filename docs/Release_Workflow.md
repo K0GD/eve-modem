@@ -58,7 +58,8 @@ The folder holds `manifest.json`, `eve-modem-<v>.zip`, `eve-modem-<v>.sha256`,
    GitHub (https://github.com/K0GD/eve-modem, to move to a DSES organization once one
    exists — the same arrangement as the Workbench's `K0GD/dses-workbench`) holds a
    read-only copy of `main` and every release tag for the team and ORI, with the
-   private working notes (`CLAUDE.md`) removed from every commit by `git filter-repo`.
+   private working notes (`CLAUDE.md`) removed from every commit by `git filter-repo`
+   and co-author trailers removed from every commit and tag message.
    The rewrite is deterministic, so the mirror's commit ids stay stable across runs.
    The script refuses to run on a dirty working tree (commit or stash first) and needs
    `git filter-repo` plus a GitHub login (`gh auth login`). Run it after **any** push to
