@@ -55,8 +55,8 @@ The folder holds `manifest.json`, `eve-modem-<v>.zip`, `eve-modem-<v>.sha256`,
 8. Record the cut in `CLAUDE.md`.
 9. **Refresh the public GitHub mirror**: `bash tools/publish_github.sh`, after the
    release commit and tag are pushed to origin. The NAS bare repo stays the master;
-   GitHub (https://github.com/K0GD/eve-modem, to move to a DSES organization once one
-   exists — the same arrangement as the Workbench's `K0GD/dses-workbench`) holds a
+   GitHub (https://github.com/dses-science/eve-modem, in the DSES organization, the
+   same arrangement as the Workbench's `dses-science/dses-workbench`) holds a
    read-only copy of `main` and every release tag for the team and ORI, with the
    private working notes (`CLAUDE.md`) removed from every commit by `git filter-repo`
    and co-author trailers removed from every commit and tag message.

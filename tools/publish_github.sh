@@ -9,15 +9,15 @@
 # The rewrite is deterministic, so repeated runs produce the same history and the
 # mirror's commit ids stay stable; tags are carried across.
 #
-#   bash tools/publish_github.sh              # mirror main + tags to K0GD/eve-modem
-#   GITHUB_REPO=dses-science/eve-modem bash tools/publish_github.sh
+#   bash tools/publish_github.sh              # mirror main + tags to dses-science/eve-modem
+#   GITHUB_REPO=<owner>/<name> bash tools/publish_github.sh   # mirror to another repository
 #
 # Run it after pushing to origin (and as the last step of a release cut). Needs
 # git filter-repo (pip install git-filter-repo) and a GitHub login (gh auth login,
 # or a credential helper for https://github.com).
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REPO="${GITHUB_REPO:-K0GD/eve-modem}"
+REPO="${GITHUB_REPO:-dses-science/eve-modem}"
 URL="https://github.com/${REPO}.git"
 EXCLUDE=(CLAUDE.md .githooks)       # private working notes and local hooks; add paths here if needed
 # filter-repo message callback (Python, bytes): drop co-author trailer lines

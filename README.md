@@ -29,11 +29,11 @@ Windows: unzip the release, create the environment with `conda env create --pref
 the details. The release zip is self-contained; running from this source tree also
 needs the Workbench's `dses_radio.py` beside `eve_app.py` (the release builder bundles it).
 
-This GitHub repository — <https://github.com/K0GD/eve-modem> — is a read-only mirror
+This GitHub repository — <https://github.com/dses-science/eve-modem> — is a read-only mirror
 of the project's master repository, kept current by the maintainer; issues and pull
 requests are welcome but are merged on the master side. The Workbench it borrows
 `dses_radio.py` from is mirrored the same way at
-<https://github.com/K0GD/dses-workbench>. License: GPL-3.0 (see LICENSE); the
+<https://github.com/dses-science/dses-workbench>. License: GPL-3.0 (see LICENSE); the
 waveform is ORI's, the station software is DSES's.
 
 ## Running it
