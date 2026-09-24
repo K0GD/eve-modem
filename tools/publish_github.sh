@@ -51,8 +51,10 @@ if git log --all --name-only --format= -- "${EXCLUDE[@]}" | grep -q .; then
     echo "filter failed: excluded paths still present" >&2
     exit 1
 fi
-if { git log --all --format=%B; git for-each-ref refs/tags --format='%(contents)'; } | grep -qi '^[[:space:]]*co-authored-by:'; then
-    echo "filter failed: a co-author trailer is still present" >&2
+# Count, don't grep -q: under pipefail an early grep exit on a big log reads as "no match".
+left="$( { git log --all --format=%B; git for-each-ref refs/tags --format='%(contents)'; } | grep -ci '^[[:space:]]*co-authored-by:' || true )"
+if [ "$left" != "0" ]; then
+    echo "filter failed: $left co-author trailer line(s) still present" >&2
     exit 1
 fi
 echo "== $(git rev-list --count main) commits, $(git tag | wc -l | tr -d ' ') tags after filtering"
